@@ -4,7 +4,8 @@ local fileTypes = { "iff", "ilbm" }
 local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
-    aspectResponse = "SPRITE_RATIO"
+    aspectResponse = "SPRITE_RATIO",
+    maxAspect = 16
 }
 
 ---@param a integer
@@ -52,8 +53,6 @@ local function readFile(importFilepath, aspectResponse)
         return nil
     end
 
-    local block4 = 4
-    local blockLen = block4
     local binData = binFile:read("a")
     binFile:close()
 
@@ -64,6 +63,7 @@ local function readFile(importFilepath, aspectResponse)
     local strbyte = string.byte
 
     local lenBinData = #binData
+    local chunkLen = 4
 
     local colorMode = ColorMode.INDEXED
     local widthImage = 0
@@ -71,6 +71,7 @@ local function readFile(importFilepath, aspectResponse)
     -- local xOrig = 0
     -- local yOrig = 0
     local planes = 0
+    -- TODO: Handle these enum cases better.
     -- mskNone an opaque image
     -- mskHasMask
     -- mskHasTransparentColor
@@ -82,6 +83,9 @@ local function readFile(importFilepath, aspectResponse)
     local yAspect = 0
     local pageWidth = 0
     local pageHeight = 0
+
+    ---@type {orig: integer, dest: integer, duration: number, isReverse: boolean}[]
+    local colorCycles = {}
 
     ---@type Color[]
     local aseColors = {}
@@ -98,13 +102,13 @@ local function readFile(importFilepath, aspectResponse)
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenInt = strunpack(">I4", lenStr)
             print(strfmt("lenInt: %d", lenInt))
-            blockLen = 8
+            chunkLen = 8
         elseif headerlc == "ilbm" then
             print(strfmt("ILBM found. Cursor: %d", cursor))
-            blockLen = 4
+            chunkLen = 4
         elseif headerlc == "pbm " then
             print(strfmt("PBM found. Cursor: %d", cursor))
-            blockLen = 4
+            chunkLen = 4
         elseif headerlc == "bmhd" then
             print(strfmt("BMHD found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
@@ -155,7 +159,7 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("pageWidth: %d", pageWidth))
             print(strfmt("pageHeight: %d", pageHeight))
 
-            blockLen = 8 + lenLocal
+            chunkLen = 8 + lenLocal
         elseif headerlc == "cmap" then
             print(strfmt("CMAP found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
@@ -178,14 +182,15 @@ local function readFile(importFilepath, aspectResponse)
                 aseColors[i] = aseColor
             end
 
-            blockLen = 8 + lenLocal
+            chunkLen = 8 + lenLocal
         elseif headerlc == "camg" then
             -- TODO: This needs to be parsed for ham, hires, etc.
+            -- Hires must impact aspect ratio, e.g., 20x11 should be 10x11?
             print(strfmt("CAMG found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
-            blockLen = 8 + lenLocal
+            chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
             -- TODO: Color Cycling Range and Timing. Test with WeatherMap image.
 
@@ -203,23 +208,52 @@ local function readFile(importFilepath, aspectResponse)
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
-            blockLen = 8 + lenLocal
+            chunkLen = 8 + lenLocal
         elseif headerlc == "crng" then
-            -- TODO: Color register range. Multiple chunks are likely.
-
-            --[[
-            typedef struct {
-            WORD  pad1;      /* reserved for future use; store 0 here    */
-            WORD  rate;      /* color cycle rate                         */
-            WORD  flags;     /* see below                                */
-            UBYTE low, high; /* lower and upper color registers selected */
-            } CRange;
-            ]]
             print(strfmt("CRNG found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
-            blockLen = 8 + lenLocal
+
+            local flagsStr = strsub(binData, cursor + 12, cursor + 13)
+            local flags = strunpack(">I2", flagsStr)
+            print(strfmt("flags: %d", flags))
+
+            -- TOOD: Figure out parsing flags.
+            -- "if the low bit is set then the cycle is “active”, and if this
+            -- bit is clear it is not active. Normally, color cycling is done
+            -- so that colors move to the next higher position in the cycle,
+            -- with the color in the high slot moving around to the low slot.
+            -- If the second bit of the flags word is set, the cycle moves in
+            -- the opposite direction."
+            -- if flags ~= 0 then
+            local lowStr = strsub(binData, cursor + 14, cursor + 14)
+            local highStr = strsub(binData, cursor + 15, cursor + 15)
+            local rateStr = strsub(binData, cursor + 10, cursor + 11)
+
+            local low = strunpack(">I1", lowStr)
+            local high = strunpack(">I1", highStr)
+            local rate = strunpack(">I2", rateStr)
+
+            print(strfmt("low: %d", low))
+            print(strfmt("high: %d", high))
+            print(strfmt("rate: %d", rate))
+
+            -- TODO: Figure out duration.
+            -- "The field rate determines the speed at which the colors
+            -- will step when color cycling is on. The units are such that
+            -- a rate of 60 steps per second is represented as 2^14 = 16384.
+            -- Slower rates can be obtained by linear scaling: for 30 steps/
+            -- second, rate = 8192; for 1 step/second, rate = 16384/60 ~273."
+            colorCycles[#colorCycles + 1] = {
+                orig = low,
+                dest = high,
+                duration = 0.1,
+                isReverse = false
+            }
+            -- end
+
+            chunkLen = 8 + lenLocal
         elseif headerlc == "body" then
             print(strfmt("BODY found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
@@ -249,6 +283,9 @@ local function readFile(importFilepath, aspectResponse)
                 while j < lenLocal do
                     local byte = bytes[1 + j]
                     local readStep = 1
+
+                    -- The algorithm is adjusted for unsigned, as opposed to
+                    -- signed bytes.
                     if byte > 128 then
                         local next = bytes[2 + j]
                         readStep = 2
@@ -341,28 +378,28 @@ local function readFile(importFilepath, aspectResponse)
                 y = y + 1
             end
 
-            blockLen = 8 + lenLocal
+            chunkLen = 8 + lenLocal
         elseif headerlc == "auth" then
-            -- Chunk includes author information.
+            -- For author information.
             print(strfmt("AUTH found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
-            blockLen = 8 + lenLocal
+            chunkLen = 8 + lenLocal
         elseif headerlc == "dpps" then
-            -- Don't know what this is, but it's found in King Tut test image.
+            -- Don't know what this is, but it's found in the King Tut image.
             print(strfmt("DPPS found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
-            blockLen = 8 + lenLocal
+            chunkLen = 8 + lenLocal
         elseif headerlc == "dppv" then
             -- Perspective and transformationstate.
             print(strfmt("DPPV found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
-            blockLen = 8 + lenLocal
+            chunkLen = 8 + lenLocal
         elseif headerlc == "tiny" then
             -- Chunk includes a thumbnail.
             print(strfmt("TINY found. Cursor: %d", cursor))
@@ -371,25 +408,25 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("lenLocal: %d", lenLocal))
 
             -- 9 instead of 8 is a fudge.
-            blockLen = 9 + lenLocal
+            chunkLen = 9 + lenLocal
         else
             if cursor <= lenBinData and #headerlc >= 4 then
                 -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
                 -- https://amiga.lychesis.net/applications/Graphicraft.html
                 print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
                     cursor, headerlc))
-                blockLen = block4
+                chunkLen = 4
             end
         end
 
-        cursor = cursor + blockLen
+        cursor = cursor + chunkLen
     end
 
     local widthSprite = widthImage
     local heightSprite = heightImage
     local xaReduced, yaReduced = reduceRatio(xAspect, yAspect)
-    xaReduced = math.min(math.max(xaReduced, 1), 16)
-    yaReduced = math.min(math.max(yaReduced, 1), 16)
+    xaReduced = math.min(math.max(xaReduced, 1), defaults.maxAspect)
+    yaReduced = math.min(math.max(yaReduced, 1), defaults.maxAspect)
     local useBake = aspectResponse == "BAKE"
     if useBake then
         widthSprite = widthImage * xaReduced
@@ -406,14 +443,14 @@ local function readFile(importFilepath, aspectResponse)
     }
     imageSpec.colorSpace = sRGBColorSpace
 
-    local image = Image(imageSpec)
-    local pxItr = image:pixels()
+    local stillImage = Image(imageSpec)
+    local pxItr = stillImage:pixels()
     for pixel in pxItr do
         pixel(pixels[1 + pixel.x + pixel.y * widthImage])
     end
 
     if useBake then
-        image:resize(widthSprite, heightSprite)
+        stillImage:resize(widthSprite, heightSprite)
     end
 
     local spriteSpec = ImageSpec {
@@ -443,8 +480,64 @@ local function readFile(importFilepath, aspectResponse)
         end
     end)
 
-    sprite.cels[1].image = image
+    sprite.cels[1].image = stillImage
     sprite.filename = app.fs.filePathAndTitle(importFilepath)
+    local layer = sprite.layers[1]
+
+    -- local lenColorCycles = #colorCycles
+    -- if lenColorCycles > 0 then
+    --     -- TODO: Implement.
+    --     local h = 0
+    --     while h < lenColorCycles do
+    --         h = h + 1
+    --         local colorCycle = colorCycles[h]
+    --         local orig = colorCycle.orig
+    --         local dest = colorCycle.dest
+    --         if orig ~= dest then
+    --             if dest < orig then dest, orig = orig, dest end
+    --             local span = 1 + dest - orig
+    --             print(strfmt("span: %d", span))
+
+    --             -- TODO: Handle reverse direction.
+    --             local dir = 1
+    --             local i = 0
+    --             while i < span do
+    --                 local prevHex = orig + i
+    --                 local nextHex = orig + (i + dir * (1 + i)) % span
+    --                 print(strfmt("prevIdx: %d, nextIdx: %d", prevHex, nextHex))
+
+    --                 local frIdx = i + 2
+    --                 print(strfmt("frIdx: %d", frIdx))
+
+    --                 local frObj = nil
+    --                 local cel = nil
+    --                 if frIdx > #sprite.frames then
+    --                     frObj = sprite:newEmptyFrame()
+    --                     cel = sprite:newCel(layer, frObj)
+    --                 else
+    --                     frObj = sprite.frames[frIdx]
+    --                     cel = layer:cel(frObj)
+    --                     if not cel then
+    --                         cel = sprite:newCel(layer, frObj)
+    --                     end
+    --                 end
+
+    --                 local cycleImage = stillImage:clone()
+    --                 local cyclePxItr = cycleImage:pixels()
+    --                 for pixel in cyclePxItr do
+    --                     local xo = pixel.x // xaReduced
+    --                     local yo = pixel.y // yaReduced
+    --                     local idx = 1 + xo + yo * widthImage
+    --                     local hex = pixels[idx]
+    --                     if hex == prevHex then pixel(nextHex) end
+    --                 end
+    --                 cel.image = cycleImage
+
+    --                 i = i + 1
+    --             end
+    --         end
+    --     end
+    -- end
 
     return sprite
 end
