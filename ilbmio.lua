@@ -1,9 +1,10 @@
 local uiAvailable = app.isUIAvailable
 
 local fileTypes = { "iff", "ilbm" }
+local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
-
+    aspectResponse = "SPRITE_RATIO"
 }
 
 ---@param a integer
@@ -24,8 +25,9 @@ local function reduceRatio(a, b)
 end
 
 ---@param importFilepath string
+---@param aspectResponse "BAKE"|"SPRITE_RATIO"|"IGNORE"
 ---@return Sprite|nil
-local function readFile(importFilepath)
+local function readFile(importFilepath, aspectResponse)
     local binFile, err = io.open(importFilepath, "rb")
     if err ~= nil then
         if binFile then binFile:close() end
@@ -64,8 +66,8 @@ local function readFile(importFilepath)
     local lenBinData = #binData
 
     local colorMode = ColorMode.INDEXED
-    local width = 0
-    local height = 0
+    local widthImage = 0
+    local heightImage = 0
     -- local xOrig = 0
     -- local yOrig = 0
     local planes = 0
@@ -100,6 +102,9 @@ local function readFile(importFilepath)
         elseif headerlc == "ilbm" then
             print(strfmt("ILBM found. Cursor: %d", cursor))
             blockLen = 4
+        elseif headerlc == "pbm " then
+            print(strfmt("PBM found. Cursor: %d", cursor))
+            blockLen = 4
         elseif headerlc == "bmhd" then
             print(strfmt("BMHD found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
@@ -107,10 +112,10 @@ local function readFile(importFilepath)
 
             local wStr = strsub(binData, cursor + 8, cursor + 9)
             local hStr = strsub(binData, cursor + 10, cursor + 11)
-            width = strunpack(">I2", wStr)
-            height = strunpack(">I2", hStr)
-            print(strfmt("width: %d", width))
-            print(strfmt("height: %d", height))
+            widthImage = strunpack(">I2", wStr)
+            heightImage = strunpack(">I2", hStr)
+            print(strfmt("width: %d", widthImage))
+            print(strfmt("height: %d", heightImage))
 
             -- local xOrigStr = strsub(binData, cursor + 12, cursor + 13)
             -- local yOrigStr = strsub(binData, cursor + 14, cursor + 15)
@@ -151,7 +156,6 @@ local function readFile(importFilepath)
             print(strfmt("pageHeight: %d", pageHeight))
 
             blockLen = 8 + lenLocal
-            -- return nil
         elseif headerlc == "cmap" then
             print(strfmt("CMAP found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
@@ -208,7 +212,7 @@ local function readFile(importFilepath)
             print(strfmt("lenLocal: %d", lenLocal))
             blockLen = 8 + lenLocal
         elseif headerlc == "crng" then
-            -- TODO: Color register range
+            -- TODO: Color register range. Multiple chunks are likely.
 
             --[[
             typedef struct {
@@ -223,6 +227,23 @@ local function readFile(importFilepath)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
             blockLen = 8 + lenLocal
+        elseif headerlc == "tiny" then
+            -- Chunk includes a thumbnail.
+            print(strfmt("TINY found. Cursor: %d", cursor))
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("lenLocal: %d", lenLocal))
+
+            -- 9 instead of 8 is a fudge.
+            blockLen = 9 + lenLocal
+        elseif headerlc == "auth" then
+            -- Chunk includes author information.
+            print(strfmt("AUTH found. Cursor: %d", cursor))
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("lenLocal: %d", lenLocal))
+
+            blockLen = 8 + lenLocal
         elseif headerlc == "body" then
             print(strfmt("BODY found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
@@ -231,39 +252,65 @@ local function readFile(importFilepath)
 
             -- For decompression purposes, these bytes need to be signed?
             ---@type integer[]
-            local sbytes = {}
+            local bytes = {}
             local i = 0
             while i < lenLocal do
                 i = i + 1
-                sbytes[i] = strunpack(">i1", strsub(binData, cursor + 7 + i))
+                -- For signed byte.
+                -- bytes[i] = strunpack(">i1", strsub(binData, cursor + 7 + i))
+
+                -- For unsigned byte.
+                bytes[i] = strbyte(binData, cursor + 7 + i)
             end
 
-            -- https://wiki.multimedia.cx/index.php/IFF#ByteRun1_Algorithm
-            if compressed then
-                -- TODO: If compressed, then you need to decompress the bytes.
-                -- local decompressed = {}
+            if compressed == 1 then
+                print("Decompressing image.")
 
-                -- local j = 0
-                -- while j < lenLocal do
-                --     local n = bytes[1 + j]
-                --     if n >= 0 and n <= 127 then
-                --     elseif n >= -127 and n <= -1 then
+                ---@type integer[]
+                local decompressed = {}
 
-                --     end
-                --     j = j + 1
-                -- end
+                local j = 0
+                while j < lenLocal do
+                    local byte = bytes[1 + j]
+                    local readStep = 1
+                    if byte > 128 then
+                        local next = bytes[2 + j]
+                        readStep = 2
+                        local k = 0
+                        while k < (257 - byte) do
+                            decompressed[#decompressed + 1] = next
+                            k = k + 1
+                        end
+                    elseif byte < 128 then
+                        local k = 0
+                        while k < (byte + 1) do
+                            decompressed[#decompressed + 1] = bytes[2 + j + k]
+                            k = k + 1
+                            readStep = readStep + 1
+                        end
+                    end
 
-                -- bytes = decompressed
+                    j = j + readStep
+                end
+
+                bytes = decompressed
+                print(strfmt("lenDecompressed: %d", #bytes))
             end
 
             ---@type integer[]
             local words = {}
-            local lenBytes = #sbytes
+            local lenBytes = #bytes
             local j = 0
             while j < lenBytes do
                 local j_2 = j // 2
-                local ubyte1 = sbytes[1 + j] & 0xff
-                local ubyte0 = sbytes[2 + j] & 0xff
+                -- For signed byte.
+                -- local ubyte1 = bytes[1 + j] & 0xff
+                -- local ubyte0 = bytes[2 + j] & 0xff
+
+                -- For unsigned byte.
+                local ubyte1 = bytes[1 + j]
+                local ubyte0 = bytes[2 + j]
+
                 words[1 + j_2] = ubyte1 << 0x08 | ubyte0
                 j = j + 2
 
@@ -271,11 +318,11 @@ local function readFile(importFilepath)
                 -- if j >= 10 then return nil end
             end
 
-            local wordsPerRow = math.ceil(width / 16)
+            local wordsPerRow = math.ceil(widthImage / 16)
 
             -- TODO: Can all this be flattened?
             local y = 0
-            while y < height do
+            while y < heightImage do
                 ---@type integer[]
                 local pxRow = {}
                 local yWord = y * planes
@@ -285,7 +332,7 @@ local function readFile(importFilepath)
                     local flatWord = (z + yWord) * wordsPerRow
 
                     local x = 0
-                    while x < width do
+                    while x < widthImage do
                         local xWord = x // 16
                         local word = words[1 + xWord + flatWord]
 
@@ -320,29 +367,60 @@ local function readFile(importFilepath)
 
             blockLen = 8 + lenLocal
         else
-            -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
-            -- https://amiga.lychesis.net/applications/Graphicraft.html
-            print(strfmt("Unexpected found. Cursor: %d. Header: %s", cursor, headerlc))
-            blockLen = block4
-            return nil
+            if #headerlc >= 4 then
+                -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
+                -- https://amiga.lychesis.net/applications/Graphicraft.html
+                print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
+                    cursor, headerlc))
+                blockLen = block4
+                return nil
+            end
         end
 
         cursor = cursor + blockLen
     end
 
-    local spriteSpec = ImageSpec {
-        width = width,
-        height = height,
+    local widthSprite = widthImage
+    local heightSprite = heightImage
+    local xaReduced, yaReduced = reduceRatio(xAspect, yAspect)
+    local useBake = aspectResponse == "BAKE"
+    if useBake then
+        widthSprite = widthImage * xaReduced
+        heightSprite = heightImage * yaReduced
+    end
+
+    local sRGBColorSpace = ColorSpace { sRGB = true }
+
+    local imageSpec = ImageSpec {
+        width = widthImage,
+        height = heightImage,
         colorMode = colorMode,
         transparentColor = alphaIndex
     }
-    spriteSpec.colorSpace = ColorSpace { sRGB = true }
-    local sprite = Sprite(spriteSpec)
+    imageSpec.colorSpace = sRGBColorSpace
 
-    -- TODO: Provide user with options for how to handle this--bake scale,
-    -- do nothing, set pixelRatio.
-    local xaReduced, yaReduced = reduceRatio(xAspect, yAspect)
-    sprite.pixelRatio = Size(xaReduced, yaReduced)
+    local image = Image(imageSpec)
+    local pxItr = image:pixels()
+    for pixel in pxItr do
+        pixel(pixels[1 + pixel.x + pixel.y * widthImage])
+    end
+
+    if useBake then
+        image:resize(widthSprite, heightSprite)
+    end
+
+    local spriteSpec = ImageSpec {
+        width = widthSprite,
+        height = heightSprite,
+        colorMode = colorMode,
+        transparentColor = alphaIndex
+    }
+    spriteSpec.colorSpace = sRGBColorSpace
+
+    local sprite = Sprite(spriteSpec)
+    if aspectResponse == "SPRITE_RATIO" then
+        sprite.pixelRatio = Size(xaReduced, yaReduced)
+    end
 
     app.command.BackgroundFromLayer()
 
@@ -358,19 +436,23 @@ local function readFile(importFilepath)
         end
     end)
 
-    local image = Image(spriteSpec)
-    local pxItr = image:pixels()
-    for pixel in pxItr do
-        pixel(pixels[1 + pixel.x + pixel.y * width])
-    end
-
     sprite.cels[1].image = image
     sprite.filename = app.fs.filePathAndTitle(importFilepath)
 
     return sprite
 end
 
-local dlg = Dialog { title = "PNM Import Export" }
+local dlg = Dialog { title = "IFF Import Export" }
+
+dlg:combobox {
+    id = "aspectResponse",
+    label = "Aspect:",
+    option = defaults.aspectResponse,
+    options = aspectResponses,
+    focus = false
+}
+
+dlg:newrow { always = false }
 
 dlg:file {
     id = "importFilepath",
@@ -417,7 +499,10 @@ dlg:button {
         }
         app.command.SwitchColors()
 
-        local sprite = readFile(importFilepath)
+        local aspectResponse = args.aspectResponse
+            or defaults.aspectResponse --[[@as string]]
+
+        local sprite = readFile(importFilepath, aspectResponse)
         if sprite then
             app.command.FitScreen()
             app.refresh()
