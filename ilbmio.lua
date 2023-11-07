@@ -179,13 +179,6 @@ local function readFile(importFilepath, aspectResponse)
             end
 
             blockLen = 8 + lenLocal
-        elseif headerlc == "dpps" then
-            -- Don't know what this is, but it's found in King Tut test image.
-            print(strfmt("DPPS found. Cursor: %d", cursor))
-            local lenStr = strsub(binData, cursor + 4, cursor + 7)
-            local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("lenLocal: %d", lenLocal))
-            blockLen = 8 + lenLocal
         elseif headerlc == "camg" then
             -- TODO: This needs to be parsed for ham, hires, etc.
             print(strfmt("CAMG found. Cursor: %d", cursor))
@@ -226,23 +219,6 @@ local function readFile(importFilepath, aspectResponse)
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
-            blockLen = 8 + lenLocal
-        elseif headerlc == "tiny" then
-            -- Chunk includes a thumbnail.
-            print(strfmt("TINY found. Cursor: %d", cursor))
-            local lenStr = strsub(binData, cursor + 4, cursor + 7)
-            local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("lenLocal: %d", lenLocal))
-
-            -- 9 instead of 8 is a fudge.
-            blockLen = 9 + lenLocal
-        elseif headerlc == "auth" then
-            -- Chunk includes author information.
-            print(strfmt("AUTH found. Cursor: %d", cursor))
-            local lenStr = strsub(binData, cursor + 4, cursor + 7)
-            local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("lenLocal: %d", lenLocal))
-
             blockLen = 8 + lenLocal
         elseif headerlc == "body" then
             print(strfmt("BODY found. Cursor: %d", cursor))
@@ -366,14 +342,43 @@ local function readFile(importFilepath, aspectResponse)
             end
 
             blockLen = 8 + lenLocal
+        elseif headerlc == "auth" then
+            -- Chunk includes author information.
+            print(strfmt("AUTH found. Cursor: %d", cursor))
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("lenLocal: %d", lenLocal))
+            blockLen = 8 + lenLocal
+        elseif headerlc == "dpps" then
+            -- Don't know what this is, but it's found in King Tut test image.
+            print(strfmt("DPPS found. Cursor: %d", cursor))
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("lenLocal: %d", lenLocal))
+            blockLen = 8 + lenLocal
+        elseif headerlc == "dppv" then
+            -- Perspective and transformationstate.
+            print(strfmt("DPPV found. Cursor: %d", cursor))
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("lenLocal: %d", lenLocal))
+            blockLen = 8 + lenLocal
+        elseif headerlc == "tiny" then
+            -- Chunk includes a thumbnail.
+            print(strfmt("TINY found. Cursor: %d", cursor))
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("lenLocal: %d", lenLocal))
+
+            -- 9 instead of 8 is a fudge.
+            blockLen = 9 + lenLocal
         else
-            if #headerlc >= 4 then
+            if cursor <= lenBinData and #headerlc >= 4 then
                 -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
                 -- https://amiga.lychesis.net/applications/Graphicraft.html
                 print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
                     cursor, headerlc))
                 blockLen = block4
-                return nil
             end
         end
 
@@ -383,6 +388,8 @@ local function readFile(importFilepath, aspectResponse)
     local widthSprite = widthImage
     local heightSprite = heightImage
     local xaReduced, yaReduced = reduceRatio(xAspect, yAspect)
+    xaReduced = math.min(math.max(xaReduced, 1), 16)
+    yaReduced = math.min(math.max(yaReduced, 1), 16)
     local useBake = aspectResponse == "BAKE"
     if useBake then
         widthSprite = widthImage * xaReduced
