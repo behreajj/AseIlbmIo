@@ -234,20 +234,22 @@ local function readFile(importFilepath, aspectResponse)
             local flags = strunpack(">I2", flagsStr)
             print(strfmt("flags: %d", flags))
 
-            local origStr = strsub(binData, cursor + 10, cursor + 10)
-            local destStr = strsub(binData, cursor + 11, cursor + 11)
+            if flags ~= 0 then
+                local origStr = strsub(binData, cursor + 10, cursor + 10)
+                local destStr = strsub(binData, cursor + 11, cursor + 11)
 
-            local orig = strunpack(">I1", origStr)
-            local dest = strunpack(">I1", destStr)
+                local orig = strunpack(">I1", origStr)
+                local dest = strunpack(">I1", destStr)
 
-            print(strfmt("orig: %d", orig))
-            print(strfmt("dest: %d", dest))
+                print(strfmt("orig: %d", orig))
+                print(strfmt("dest: %d", dest))
 
-            colorCycles[#colorCycles + 1] = {
-                orig = orig,
-                dest = dest,
-                isReverse = false
-            }
+                colorCycles[#colorCycles + 1] = {
+                    orig = orig,
+                    dest = dest,
+                    isReverse = false
+                }
+            end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "crng" then
@@ -267,31 +269,31 @@ local function readFile(importFilepath, aspectResponse)
             -- with the color in the high slot moving around to the low slot.
             -- If the second bit of the flags word is set, the cycle moves in
             -- the opposite direction."
-            -- if flags ~= 0 then
-            local origStr = strsub(binData, cursor + 14, cursor + 14)
-            local destStr = strsub(binData, cursor + 15, cursor + 15)
-            local rateStr = strsub(binData, cursor + 10, cursor + 11)
+            if flags ~= 0 then
+                local origStr = strsub(binData, cursor + 14, cursor + 14)
+                local destStr = strsub(binData, cursor + 15, cursor + 15)
+                local rateStr = strsub(binData, cursor + 10, cursor + 11)
 
-            local orig = strunpack(">I1", origStr)
-            local dest = strunpack(">I1", destStr)
-            local rate = strunpack(">I2", rateStr)
+                local orig = strunpack(">I1", origStr)
+                local dest = strunpack(">I1", destStr)
+                local rate = strunpack(">I2", rateStr)
 
-            print(strfmt("orig: %d", orig))
-            print(strfmt("dest: %d", dest))
-            print(strfmt("rate: %d", rate))
+                print(strfmt("orig: %d", orig))
+                print(strfmt("dest: %d", dest))
+                print(strfmt("rate: %d", rate))
 
-            -- TODO: Figure out duration.
-            -- "The field rate determines the speed at which the colors
-            -- will step when color cycling is on. The units are such that
-            -- a rate of 60 steps per second is represented as 2^14 = 16384.
-            -- Slower rates can be obtained by linear scaling: for 30 steps/
-            -- second, rate = 8192; for 1 step/second, rate = 16384/60 ~273."
-            colorCycles[#colorCycles + 1] = {
-                orig = orig,
-                dest = dest,
-                isReverse = false
-            }
-            -- end
+                -- TODO: Figure out duration.
+                -- "The field rate determines the speed at which the colors
+                -- will step when color cycling is on. The units are such that
+                -- a rate of 60 steps per second is represented as 2^14 = 16384.
+                -- Slower rates can be obtained by linear scaling: for 30 steps/
+                -- second, rate = 8192; for 1 step/second, rate = 16384/60 ~273."
+                colorCycles[#colorCycles + 1] = {
+                    orig = orig,
+                    dest = dest,
+                    isReverse = false
+                }
+            end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "body" then
