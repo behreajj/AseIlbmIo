@@ -4,6 +4,8 @@ local fileTypes = { "anim", "iff", "ilbm", "lbm" }
 local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
+    -- To test anim files: https://aminet.net/pix/anim
+    -- https://www.wikiwand.com/en/LHA_(file_format)
     aspectResponse = "SPRITE_RATIO",
     maxAspect = 16,
     maxFrames = 512
@@ -238,7 +240,6 @@ local function readFile(importFilepath, aspectResponse)
     local lenBinData = #binData
     local chunkLen = 4
 
-    local colorMode = ColorMode.INDEXED
     local wImage = 1
     local hImage = 1
     local planes = 0
@@ -260,6 +261,8 @@ local function readFile(importFilepath, aspectResponse)
     local isHighRes = false
     local isInterlaced = false
     local isHam = false
+    local isTrueColor24 = false
+    local isTrueColor32 = false
 
     ---@type {orig: integer, dest: integer, span: integer, isReverse: boolean}[]
     local colorCycles = {}
@@ -275,10 +278,10 @@ local function readFile(importFilepath, aspectResponse)
         local header = strsub(binData, cursor, cursor + 3)
         local headerlc = strlower(header)
         if headerlc == "form" then
-            print(strfmt("\nFORM found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenInt = strunpack(">I4", lenStr)
-            print(strfmt("lenInt: %d", lenInt))
+            print(strfmt("\nFORM found. Cursor: %d.\nlenInt: %d",
+                cursor, lenInt))
             chunkLen = 8
         elseif headerlc == "ilbm" then
             print(strfmt("\nILBM found. Cursor: %d.", cursor))
@@ -287,11 +290,15 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("\nPBM found. Cursor: %d.", cursor))
             isPbm = true
             chunkLen = 4
+        elseif headerlc == "anim" then
+            print(strfmt("\nANIM found. Cursor: %d.", cursor))
+            isPbm = true
+            chunkLen = 4
         elseif headerlc == "bmhd" then
-            print(strfmt("\nBMHD found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("lenLocal: %d", lenLocal))
+            print(strfmt("\nBMHD found. Cursor: %d.\nlenLocal: %d",
+                cursor, lenLocal))
 
             -- Word 1.
             local wStr = strsub(binData, cursor + 8, cursor + 9)
@@ -300,24 +307,26 @@ local function readFile(importFilepath, aspectResponse)
             hImage = strunpack(">I2", hStr)
             wSprite = wImage
             hSprite = hImage
-            print(strfmt("width: %d", wImage))
-            print(strfmt("height: %d", hImage))
+            print(strfmt("width: %d\nheight: %d", wImage, hImage))
 
             -- Word 2.
             local planesStr = strsub(binData, cursor + 16, cursor + 16)
             local maskStr = strsub(binData, cursor + 17, cursor + 17)
             local comprStr = strsub(binData, cursor + 18, cursor + 18)
-            local reservedStr = strsub(binData, cursor + 19, cursor + 19)
 
             -- Word 3.
             planes = strunpack(">I1", planesStr)
             masking = strunpack(">I1", maskStr)
             compressed = strunpack(">I1", comprStr)
-            local reserved = strunpack(">I1", reservedStr)
-            print(strfmt("planes: %d", planes))
-            print(strfmt("masking: %d", masking))
-            print(strfmt("compressed: %d", compressed))
-            print(strfmt("reserved: %d", reserved))
+            isTrueColor24 = planes == 24
+            isTrueColor32 = planes == 32
+            print(strfmt(
+                "planes: %d\nmasking: %d\ncompressed: %d",
+                planes, masking, compressed))
+
+            if isTrueColor24 or isTrueColor32 then
+                print("True color image.")
+            end
 
             -- Word 4.
             local trclStr = strsub(binData, cursor + 20, cursor + 21)
@@ -335,8 +344,7 @@ local function readFile(importFilepath, aspectResponse)
             local pghStr = strsub(binData, cursor + 26, cursor + 27)
             wSprite = strunpack(">I2", pgwStr)
             hSprite = strunpack(">I2", pghStr)
-            print(strfmt("pageWidth: %d", wSprite))
-            print(strfmt("pageHeight: %d", hSprite))
+            print(strfmt("wSprite: %d\nhSprite: %d", wSprite, hSprite))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "cmap" then
@@ -357,19 +365,17 @@ local function readFile(importFilepath, aspectResponse)
                 i = i + 1
                 aseColors[i] = aseColor
 
-                print(strfmt("%03d: %03d %03d %03d, #%06x",
-                    i - 1, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
+                -- print(strfmt("%03d: %03d %03d %03d, #%06x",
+                --     i - 1, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
             end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "camg" then
-            -- TODO: This needs to parse correcly for HAM.
-
             -- Hires must impact aspect ratio, e.g., 20x11 should be 10x11?
-            print(strfmt("\nCAMG found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("lenLocal: %d", lenLocal))
+            print(strfmt("\nCAMG found. Cursor: %d.\nlenLocal: %d",
+                cursor, lenLocal))
 
             local flagsStr = strsub(binData, cursor + 8, cursor + 11)
             local flags = strunpack(">I4", flagsStr)
@@ -380,20 +386,28 @@ local function readFile(importFilepath, aspectResponse)
             isExtraHalf = (flags & 0x80) ~= 0
             isInterlaced = (flags & 0x4) ~= 0
 
-            if wImage >= 640 then isHighRes = true end
-            if hImage >= 400 then isInterlaced = true end
-
             if isHighRes then print("High res.") end
             if isHam then print("HAM.") end
             if isExtraHalf then print("Extra Half Bright") end
             if isInterlaced then print("Interlaced.") end
 
             chunkLen = 8 + lenLocal
-        elseif headerlc == "ccrt" then
-            print(strfmt("\nCCRT found. Cursor: %d.", cursor))
+        elseif headerlc == "drng" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("lenLocal: %d", lenLocal))
+            print(strfmt("\nDRNG found. Cursor: %d.\nlenLocal: %d",
+                cursor, lenLocal))
+
+            -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
+            -- TODO: This allows the possibility of non-contiguous indices, so
+            -- you'll have to redo your colorCycle palettes format.
+
+            chunkLen = 8 + lenLocal
+        elseif headerlc == "ccrt" then
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("\nCCRT found. Cursor: %d.\nlenLocal: %d",
+                cursor, lenLocal))
 
             local dirStr = strsub(binData, cursor + 8, cursor + 9)
             local dir = strunpack(">i2", dirStr)
@@ -422,10 +436,10 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "crng" then
-            print(strfmt("\nCRNG found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("lenLocal: %d", lenLocal))
+            print(strfmt("\nCRNG found. Cursor: %d.\nlenLocal: %d",
+                cursor, lenLocal))
 
             local flagsStr = strsub(binData, cursor + 12, cursor + 13)
             local flags = strunpack(">I2", flagsStr)
@@ -465,15 +479,18 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "body" then
-            print(strfmt("\nBODY found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("\nBODY found. Cursor: %d.", cursor))
             print(strfmt("lenLocal: %d", lenLocal))
 
             bodyFound = true
 
-            -- CAMG chunk may occur before CMAP chunk, so this needs to wait
-            -- until body to figure out...
+            -- CAMG chunk may be missing entirely, or occur before CMAP chunk,
+            -- so this needs to wait until body to figure out...
+            if wImage >= 640 then isHighRes = true end
+            if hImage >= 400 then isInterlaced = true end
+
             if isExtraHalf then
                 local i = 0
                 while i < 32 do
@@ -507,6 +524,7 @@ local function readFile(importFilepath, aspectResponse)
                 print(strfmt("Decompressed: %d", #bytes))
             end
 
+            -- TODO: Support true color.
             if isPbm then
                 pixels = bytes
             else
@@ -516,11 +534,8 @@ local function readFile(importFilepath, aspectResponse)
                 local j = 0
                 while j < lenBytes do
                     local j_2 = j // 2
-                    -- For signed byte.
-                    -- local ubyte1 = bytes[1 + j] & 0xff
-                    -- local ubyte0 = bytes[2 + j] & 0xff
-
                     -- For unsigned byte.
+                    -- If signed byte, mask by byte & 0xff.
                     local ubyte1 = bytes[1 + j]
                     local ubyte0 = bytes[2 + j]
 
@@ -582,7 +597,17 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "auth" then
-            -- Author information.
+            -- Author.
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            chunkLen = 8 + lenLocal
+        elseif headerlc == "anno" then
+            -- Annotation.
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            chunkLen = 8 + lenLocal
+        elseif headerlc == "dpi " then
+            -- Divets per inch.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             chunkLen = 8 + lenLocal
@@ -598,9 +623,9 @@ local function readFile(importFilepath, aspectResponse)
             chunkLen = 8 + lenLocal
         elseif headerlc == "tiny" then
             -- Thumbnail.
-            print(strfmt("TINY found. Cursor: %d", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("TINY found. Cursor: %d", cursor))
             print(strfmt("lenLocal: %d", lenLocal))
 
             chunkLen = 8 + lenLocal
@@ -612,11 +637,11 @@ local function readFile(importFilepath, aspectResponse)
             end
         else
             if cursor <= lenBinData and #headerlc >= 4 then
-                -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
-                -- https://amiga.lychesis.net/applications/Graphicraft.html
-                -- print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
-                --     cursor, headerlc))
                 chunkLen = 4
+
+                print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
+                    cursor, headerlc))
+                return nil
             end
         end
 
@@ -628,6 +653,10 @@ local function readFile(importFilepath, aspectResponse)
     yaReduced = math.min(math.max(yaReduced, 1), defaults.maxAspect)
 
     local sRGBColorSpace = ColorSpace { sRGB = true }
+    local colorMode = ColorMode.INDEXED
+    if isTrueColor24 or isTrueColor32 then
+        colorMode = ColorMode.RGB
+    end
 
     local imageSpec = ImageSpec {
         width = wImage,
@@ -636,12 +665,6 @@ local function readFile(importFilepath, aspectResponse)
         transparentColor = alphaIndex
     }
     imageSpec.colorSpace = sRGBColorSpace
-
-    local stillImage = Image(imageSpec)
-    local pxItr = stillImage:pixels()
-    for pixel in pxItr do
-        pixel(pixels[1 + pixel.x + pixel.y * wImage])
-    end
 
     local spriteSpec = ImageSpec {
         width = wSprite,
@@ -652,11 +675,10 @@ local function readFile(importFilepath, aspectResponse)
     spriteSpec.colorSpace = sRGBColorSpace
 
     local sprite = Sprite(spriteSpec)
+    sprite.filename = app.fs.filePathAndTitle(importFilepath)
     if aspectResponse == "SPRITE_RATIO" then
         sprite.pixelRatio = Size(xaReduced, yaReduced)
     end
-
-    app.command.BackgroundFromLayer()
 
     local lenAseColors = #aseColors
     if lenAseColors > 0 then
@@ -670,16 +692,38 @@ local function readFile(importFilepath, aspectResponse)
                 palette:setColor(i - 1, aseColor)
             end
         end)
-    else
-        -- TODO: Use color quantization command for true-color sprites?
     end
 
+    if not bodyFound then
+        if aspectResponse == "BAKE" then
+            sprite:resize(wSprite * xaReduced, hSprite * yaReduced)
+        end
+        return sprite
+    end
+
+    local stillImage = Image(imageSpec)
+    local pxItr = stillImage:pixels()
+    for pixel in pxItr do
+        pixel(pixels[1 + pixel.x + pixel.y * wImage])
+    end
+    if not isTrueColor32 then
+        app.command.BackgroundFromLayer()
+    end
     sprite.cels[1].image = stillImage
-    sprite.filename = app.fs.filePathAndTitle(importFilepath)
+
+    if #aseColors <= 0 then
+        app.command.ColorQuantization {
+            ui = false,
+            maxColors = 256,
+            withAlpha = false
+        }
+    end
 
     local lenColorCycles = #colorCycles
     print(strfmt("\nlenColorCycles: %d", lenColorCycles))
-    if bodyFound and lenColorCycles > 0 then
+    if lenColorCycles > 0 then
+        -- TODO: Do color cycling indices work differently for extra half brite?
+
         local activeLayer = sprite.layers[1]
 
         -- Create a dictionary where a palette index, the key, is assigned an
@@ -772,7 +816,6 @@ local function readFile(importFilepath, aspectResponse)
     if aspectResponse == "BAKE" then
         sprite:resize(wSprite * xaReduced, hSprite * yaReduced)
     end
-
     return sprite
 end
 
