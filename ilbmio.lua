@@ -213,7 +213,6 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("lenLocal: %d", lenLocal))
             chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
-            -- TODO: Color Cycling Range and Timing. Test with WeatherMap image.
 
             --[[
             typedef struct {
@@ -232,9 +231,9 @@ local function readFile(importFilepath, aspectResponse)
 
             local flagsStr = strsub(binData, cursor + 8, cursor + 9)
             local flags = strunpack(">I2", flagsStr)
-            print(strfmt("flags: %d", flags))
+            print(strfmt("flags: %d 0x%04x", flags, flags))
 
-            if flags ~= 0 then
+            if (flags & 1) ~= 0  then
                 local origStr = strsub(binData, cursor + 10, cursor + 10)
                 local destStr = strsub(binData, cursor + 11, cursor + 11)
 
@@ -247,7 +246,7 @@ local function readFile(importFilepath, aspectResponse)
                 colorCycles[#colorCycles + 1] = {
                     orig = orig,
                     dest = dest,
-                    isReverse = false
+                    isReverse = ((flags >> 1) & 1) ~= 0
                 }
             end
 
@@ -260,7 +259,10 @@ local function readFile(importFilepath, aspectResponse)
 
             local flagsStr = strsub(binData, cursor + 12, cursor + 13)
             local flags = strunpack(">I2", flagsStr)
-            print(strfmt("flags: %d", flags))
+            print(strfmt("flags: %d 0x%04x", flags, flags))
+            if ((flags >> 1) & 1) ~= 0 then
+                print("isReversed")
+            end
 
             -- TOOD: Figure out parsing flags.
             -- "if the low bit is set then the cycle is “active”, and if this
@@ -269,7 +271,7 @@ local function readFile(importFilepath, aspectResponse)
             -- with the color in the high slot moving around to the low slot.
             -- If the second bit of the flags word is set, the cycle moves in
             -- the opposite direction."
-            if flags ~= 0 then
+            if (flags & 1) ~= 0 then
                 local origStr = strsub(binData, cursor + 14, cursor + 14)
                 local destStr = strsub(binData, cursor + 15, cursor + 15)
                 local rateStr = strsub(binData, cursor + 10, cursor + 11)
@@ -291,7 +293,7 @@ local function readFile(importFilepath, aspectResponse)
                 colorCycles[#colorCycles + 1] = {
                     orig = orig,
                     dest = dest,
-                    isReverse = false
+                    isReverse = ((flags >> 1) & 1) ~= 0
                 }
             end
 
