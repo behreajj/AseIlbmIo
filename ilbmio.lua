@@ -5,7 +5,8 @@ local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
     aspectResponse = "SPRITE_RATIO",
-    maxAspect = 16
+    maxAspect = 16,
+    maxFrames = 512
 }
 
 ---@param bytes integer[]
@@ -353,7 +354,6 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "body" then
-            -- TODO: Treat PBM bodies differently.
             print(strfmt("\nBODY found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
@@ -376,72 +376,76 @@ local function readFile(importFilepath, aspectResponse)
                 bytes = decompress(bytes)
             end
 
-            ---@type integer[]
-            local words = {}
-            local lenBytes = #bytes
-            local j = 0
-            while j < lenBytes do
-                local j_2 = j // 2
-                -- For signed byte.
-                -- local ubyte1 = bytes[1 + j] & 0xff
-                -- local ubyte0 = bytes[2 + j] & 0xff
-
-                -- For unsigned byte.
-                local ubyte1 = bytes[1 + j]
-                local ubyte0 = bytes[2 + j]
-
-                words[1 + j_2] = ubyte1 << 0x08 | ubyte0
-                j = j + 2
-
-                -- print(strfmt("word: %04X", words[1 + j_2]))
-                -- if j >= 10 then return nil end
-            end
-
-            local wordsPerRow = math.ceil(wImage / 16)
-
-            -- TODO: Can all this be flattened?
-            local y = 0
-            while y < hImage do
+            if isPbm then
+                pixels = bytes
+            else
                 ---@type integer[]
-                local pxRow = {}
-                local yWord = y * planes
+                local words = {}
+                local lenBytes = #bytes
+                local j = 0
+                while j < lenBytes do
+                    local j_2 = j // 2
+                    -- For signed byte.
+                    -- local ubyte1 = bytes[1 + j] & 0xff
+                    -- local ubyte0 = bytes[2 + j] & 0xff
 
-                local z = 0
-                while z < planes do
-                    local flatWord = (z + yWord) * wordsPerRow
+                    -- For unsigned byte.
+                    local ubyte1 = bytes[1 + j]
+                    local ubyte0 = bytes[2 + j]
 
-                    local x = 0
-                    while x < wImage do
-                        local xWord = x // 16
-                        local word = words[1 + xWord + flatWord]
+                    words[1 + j_2] = ubyte1 << 0x08 | ubyte0
+                    j = j + 2
 
-                        local xBit = x % 16
-                        local shift = 15 - xBit
-                        local bit = (word >> shift) & 1
-                        local composite = pxRow[1 + x]
-                        if composite then
-                            pxRow[1 + x] = composite | (bit << z)
-                        else
-                            pxRow[1 + x] = bit << z
+                    -- print(strfmt("word: %04X", words[1 + j_2]))
+                    -- if j >= 10 then return nil end
+                end
+
+                local wordsPerRow = math.ceil(wImage / 16)
+
+                -- TODO: Can all this be flattened?
+                local y = 0
+                while y < hImage do
+                    ---@type integer[]
+                    local pxRow = {}
+                    local yWord = y * planes
+
+                    local z = 0
+                    while z < planes do
+                        local flatWord = (z + yWord) * wordsPerRow
+
+                        local x = 0
+                        while x < wImage do
+                            local xWord = x // 16
+                            local word = words[1 + xWord + flatWord]
+
+                            local xBit = x % 16
+                            local shift = 15 - xBit
+                            local bit = (word >> shift) & 1
+                            local composite = pxRow[1 + x]
+                            if composite then
+                                pxRow[1 + x] = composite | (bit << z)
+                            else
+                                pxRow[1 + x] = bit << z
+                            end
+
+                            x = x + 1
                         end
 
-                        x = x + 1
+                        z = z + 1
                     end
 
-                    z = z + 1
+                    -- print(table.concat(pxRow, ", "))
+                    -- if y>=1 then return nil end
+
+                    local lenPxRow = #pxRow
+                    local k = 0
+                    while k < lenPxRow do
+                        k = k + 1
+                        pixels[#pixels + 1] = pxRow[k]
+                    end
+
+                    y = y + 1
                 end
-
-                -- print(table.concat(pxRow, ", "))
-                -- if y>=1 then return nil end
-
-                local lenPxRow = #pxRow
-                local k = 0
-                while k < lenPxRow do
-                    k = k + 1
-                    pixels[#pixels + 1] = pxRow[k]
-                end
-
-                y = y + 1
             end
 
             chunkLen = 8 + lenLocal
@@ -567,57 +571,59 @@ local function readFile(importFilepath, aspectResponse)
         end
         print(strfmt("Least common multiple: %d", requiredFrames))
 
-        -- Copy still image to new frames.
-        app.transaction(function()
-            local g = 1
-            while g < requiredFrames do
-                g = g + 1
-                local frObj = sprite:newEmptyFrame()
-                sprite:newCel(activeLayer, frObj, stillImage)
-            end
-        end)
+        if requiredFrames <= defaults.maxFrames then
+            -- Copy still image to new frames.
+            app.transaction(function()
+                local g = 1
+                while g < requiredFrames do
+                    g = g + 1
+                    local frObj = sprite:newEmptyFrame()
+                    sprite:newCel(activeLayer, frObj, stillImage)
+                end
+            end)
 
-        local h = 0
-        while h < lenColorCycles do
-            h = h + 1
-            local colorCycle = colorCycles[h]
-            local palIdxOrig = colorCycle.orig
-            local palSpan = colorCycle.span
-            local isReverse = colorCycle.isReverse
-            local palIncr = -1
-            if isReverse then palIncr = 1 end
+            local h = 0
+            while h < lenColorCycles do
+                h = h + 1
+                local colorCycle = colorCycles[h]
+                local palIdxOrig = colorCycle.orig
+                local palSpan = colorCycle.span
+                local isReverse = colorCycle.isReverse
+                local palIncr = -1
+                if isReverse then palIncr = 1 end
 
-            local frIdx = 1
-            while frIdx < requiredFrames do
-                frIdx = frIdx + 1
+                local frIdx = 1
+                while frIdx < requiredFrames do
+                    frIdx = frIdx + 1
 
-                local shift = (frIdx - 1) * palIncr
-                local cel = activeLayer:cel(frIdx)
-                if cel then
-                    local frImage = cel.image
+                    local shift = (frIdx - 1) * palIncr
+                    local cel = activeLayer:cel(frIdx)
+                    if cel then
+                        local frImage = cel.image
 
-                    local j = 0
-                    while j < palSpan do
-                        local usedPixels = histogram[palIdxOrig + j]
-                        if usedPixels then
-                            local shifted = palIdxOrig + (j + shift) % palSpan
-                            local lenUsedPixels = #usedPixels
-                            local k = 0
-                            while k < lenUsedPixels do
-                                k = k + 1
-                                local coord = usedPixels[k]
-                                local x = coord % wImage
-                                local y = coord // wImage
-                                frImage:drawPixel(x, y, shifted)
-                            end -- End of pixels used by hex loop.
-                        end     -- End of histogram array exists at key.
+                        local j = 0
+                        while j < palSpan do
+                            local usedPixels = histogram[palIdxOrig + j]
+                            if usedPixels then
+                                local shifted = palIdxOrig + (j + shift) % palSpan
+                                local lenUsedPixels = #usedPixels
+                                local k = 0
+                                while k < lenUsedPixels do
+                                    k = k + 1
+                                    local coord = usedPixels[k]
+                                    local x = coord % wImage
+                                    local y = coord // wImage
+                                    frImage:drawPixel(x, y, shifted)
+                                end -- End of pixels used by hex loop.
+                            end     -- End of histogram array exists at key.
 
-                        j = j + 1
-                    end -- End of palette span loop.
-                end     -- End of cel exists check.
-            end         -- End of frame loop.
-        end             --End of color cycles loop.
-    end                 -- End of add color cycle data check.
+                            j = j + 1
+                        end -- End of palette span loop.
+                    end     -- End of cel exists check.
+                end         -- End of frame loop.
+            end             --End of color cycles loop.
+        end                 --End beneath frame max.
+    end                     -- End of add color cycle data check.
 
     if aspectResponse == "BAKE" then
         sprite:resize(wSprite * xaReduced, hSprite * yaReduced)
