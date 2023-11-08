@@ -1,6 +1,6 @@
 local uiAvailable = app.isUIAvailable
 
-local fileTypes = { "iff", "ilbm" }
+local fileTypes = { "iff", "ilbm", "lbm" }
 local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
@@ -569,7 +569,7 @@ local function readFile(importFilepath, aspectResponse)
 
             requiredFrames = lcm(requiredFrames, span)
         end
-        print(strfmt("Least common multiple: %d", requiredFrames))
+        print(strfmt("\nLeast common multiple: %d", requiredFrames))
 
         if requiredFrames <= defaults.maxFrames then
             -- Copy still image to new frames.
@@ -621,8 +621,8 @@ local function readFile(importFilepath, aspectResponse)
                         end -- End of palette span loop.
                     end     -- End of cel exists check.
                 end         -- End of frame loop.
-            end             --End of color cycles loop.
-        end                 --End beneath frame max.
+            end             -- End of color cycles loop.
+        end                 -- End beneath frame max.
     end                     -- End of add color cycle data check.
 
     if aspectResponse == "BAKE" then
