@@ -1,6 +1,6 @@
 local uiAvailable = app.isUIAvailable
 
-local fileTypes = { "iff", "ilbm", "lbm" }
+local fileTypes = { "anim", "iff", "ilbm", "lbm" }
 local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
@@ -69,12 +69,13 @@ local function reduceRatio(a, b)
 end
 
 ---@param sprite Sprite
+---@param isPbm boolean
 ---@return string
-local function writeFile(sprite)
+local function writeFile(sprite, isPbm)
     local strpack = string.pack
     local spriteSpec = sprite.spec
-    local widthSprite = spriteSpec.width
-    local heightSprite = spriteSpec.height
+    local wSprite = spriteSpec.width
+    local hSprite = spriteSpec.height
     local alphaIndex = spriteSpec.transparentColor
     local pxRatio = sprite.pixelRatio
     local xAspect = math.max(1, math.abs(pxRatio.w))
@@ -121,22 +122,42 @@ local function writeFile(sprite)
         planes = math.max(1, math.ceil(math.log(lenPalette, 2)))
     end
 
+    local formatHeader = "ILBM"
+    if isPbm then formatHeader = "PBM " end
+
+    local lenBodyData = 0
+    if isPbm then
+        lenBodyData = wSprite * hSprite
+    else
+        local wordsPerRow = math.ceil(wSprite / 16)
+        local charsPerRow = wordsPerRow * 2
+        lenBodyData = hSprite * planes * charsPerRow
+    end
+
+    -- TODO: Precalculate CMAP length.
+    local lenCmapData = 0
+    if writeCmap then
+
+    end
+
+    -- TODO: Precalculate form length.
+
     ---@type string[]
     local binWords = {
         "FORM",
-        strpack(">I4", 0), -- TODO: Replace later.
-        "ILBM",
+        strpack(">I4", 0), -- TODO: Place precalculated form length here.
+        formatHeader,
         "BMHD",
-        strpack(">I4", 5 * 4),
-        strpack(">I4", widthSprite << 0x10 | heightSprite),           -- 1. image w, h
+        strpack(">I4", 5 * 4),                                        -- Chunk length.
+        strpack(">I4", wSprite << 0x10 | hSprite),                    -- 1. image w, h
         strpack(">I4", 0),                                            -- 2. xOrig, yOrig
         strpack(">I4", planes << 0x10),                               -- 3. planes, mask, compression
         strpack(">I4", alphaIndex << 10 | xAspect << 0x08 | yAspect), -- 4. alpha mask, px aspect ratio
-        strpack(">I4", widthSprite << 0x10 | heightSprite),           -- 5. page w, h
-        -- TODO: CAMG block.
+        strpack(">I4", wSprite << 0x10 | hSprite),                    -- 5. page w, h
     }
 
     if writeCmap then
+        -- TODO: Raise palette length to nearest power of two, pad out if necessary?
         local clampedLenPalette = math.min(256, #palette)
         binWords[#binWords + 1] = "CMAP"
         binWords[#binWords + 1] = strpack(">I4", clampedLenPalette * 3)
@@ -155,6 +176,19 @@ local function writeFile(sprite)
 
     local flat = Image(spriteSpec)
     flat:drawSprite(sprite, 1)
+    local pxItr = flat:pixels()
+    if isPbm then
+        for pixel in pxItr do
+            local idx = pixel()
+            binWords[#binWords + 1] = idx
+        end
+    else
+        -- TODO: IMPLEMENT
+    end
+
+    binWords[#binWords + 1] = "BODY"
+    binWords[#binWords + 1] = strpack(">I4", lenBodyData)
+    binWords[#binWords + 1] = strpack(">I4", 0)
 
     local binStr = table.concat(binWords, "")
     -- TODO: Write formlen
@@ -200,6 +234,7 @@ local function readFile(importFilepath, aspectResponse)
     local strunpack = string.unpack
     local strbyte = string.byte
 
+    local bodyFound = false
     local lenBinData = #binData
     local chunkLen = 4
 
@@ -221,7 +256,10 @@ local function readFile(importFilepath, aspectResponse)
     local hSprite = 1
 
     local isPbm = false
-    local extraHalfBrite = false
+    local isExtraHalf = false
+    local isHighRes = false
+    local isInterlaced = false
+    local isHam = false
 
     ---@type {orig: integer, dest: integer, span: integer, isReverse: boolean}[]
     local colorCycles = {}
@@ -320,7 +358,7 @@ local function readFile(importFilepath, aspectResponse)
                 aseColors[i] = aseColor
 
                 print(strfmt("%03d: %03d %03d %03d, #%06x",
-                    i, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
+                    i - 1, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
             end
 
             chunkLen = 8 + lenLocal
@@ -337,7 +375,18 @@ local function readFile(importFilepath, aspectResponse)
             local flags = strunpack(">I4", flagsStr)
             print(strfmt("flags: %d 0x%04x", flags, flags))
 
-            extraHalfBrite = (flags & 0x80) ~= 0
+            isHighRes = (flags & 0x8000) ~= 0
+            isHam = (flags & 0x800) ~= 0
+            isExtraHalf = (flags & 0x80) ~= 0
+            isInterlaced = (flags & 0x4) ~= 0
+
+            if wImage >= 640 then isHighRes = true end
+            if hImage >= 400 then isInterlaced = true end
+
+            if isHighRes then print("High res.") end
+            if isHam then print("HAM.") end
+            if isExtraHalf then print("Extra Half Bright") end
+            if isInterlaced then print("Interlaced.") end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
@@ -421,11 +470,11 @@ local function readFile(importFilepath, aspectResponse)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
 
+            bodyFound = true
+
             -- CAMG chunk may occur before CMAP chunk, so this needs to wait
             -- until body to figure out...
-            if extraHalfBrite then
-                print("Extra Half Brite.")
-
+            if isExtraHalf then
                 local i = 0
                 while i < 32 do
                     i = i + 1
@@ -455,6 +504,7 @@ local function readFile(importFilepath, aspectResponse)
 
             if compressed == 1 then
                 bytes = decompress(bytes)
+                print(strfmt("Decompressed: %d", #bytes))
             end
 
             if isPbm then
@@ -518,6 +568,7 @@ local function readFile(importFilepath, aspectResponse)
                     -- print(table.concat(pxRow, ", "))
                     -- if y>=1 then return nil end
 
+                    -- TODO: Is there a way that this step can be skipped?
                     local lenPxRow = #pxRow
                     local k = 0
                     while k < lenPxRow do
@@ -552,8 +603,13 @@ local function readFile(importFilepath, aspectResponse)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
 
-            -- 9 instead of 8 is a fudge.
-            chunkLen = 9 + lenLocal
+            chunkLen = 8 + lenLocal
+
+            -- Some Mark Ferrari files have extra zeroes at the end of tiny
+            -- chunks which make it hard to find body.
+            while strbyte(binData, cursor + chunkLen) == 0 do
+                chunkLen = chunkLen + 1
+            end
         else
             if cursor <= lenBinData and #headerlc >= 4 then
                 -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
@@ -623,7 +679,7 @@ local function readFile(importFilepath, aspectResponse)
 
     local lenColorCycles = #colorCycles
     print(strfmt("\nlenColorCycles: %d", lenColorCycles))
-    if lenColorCycles > 0 then
+    if bodyFound and lenColorCycles > 0 then
         local activeLayer = sprite.layers[1]
 
         -- Create a dictionary where a palette index, the key, is assigned an
