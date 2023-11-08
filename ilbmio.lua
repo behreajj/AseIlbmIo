@@ -75,23 +75,91 @@ local function writeFile(sprite)
     local spriteSpec = sprite.spec
     local widthSprite = spriteSpec.width
     local heightSprite = spriteSpec.height
+    local alphaIndex = spriteSpec.transparentColor
     local pxRatio = sprite.pixelRatio
     local xAspect = math.max(1, math.abs(pxRatio.w))
     local yAspect = math.max(1, math.abs(pxRatio.h))
-    local planes = 8 -- 2 ^ 8 = 256
-    local binStrs = {
+
+    local palette = nil
+    local planes = 8
+    local colorMode = spriteSpec.colorMode
+    local writeCmap = true
+    local writeTrueColor24 = false
+    local writeTrueColor32 = false
+    if colorMode == ColorMode.RGB then
+        -- TODO: How to handle this case? Maybe make a dummy sprite copy, then
+        -- convert to index, then close when this process is done?
+        palette = sprite.palettes[1]
+        if sprite.backgroundLayer then
+            planes = 24
+            writeTrueColor24 = true
+        else
+            planes = 32
+            writeTrueColor32 = true
+        end
+        writeCmap = false
+    elseif colorMode == ColorMode.GRAY then
+        palette = Palette(256)
+        local i = 0
+        while i < 256 do
+            palette:setColor(i, Color { r = i, g = i, b = i, a = 255 })
+            i = i + 1
+        end
+        planes = 8
+    else
+        -- Assume indexed color is the default.
+        -- 2 ^ 1 =   2
+        -- 2 ^ 2 =   4
+        -- 2 ^ 3 =   8
+        -- 2 ^ 4 =  16
+        -- 2 ^ 5 =  32
+        -- 2 ^ 6 =  64
+        -- 2 ^ 7 = 128
+        -- 2 ^ 8 = 256
+        palette = sprite.palettes[1]
+        local lenPalette = #palette
+        planes = math.max(1, math.ceil(math.log(lenPalette, 2)))
+    end
+
+    ---@type string[]
+    local binWords = {
         "FORM",
         strpack(">I4", 0), -- TODO: Replace later.
         "ILBM",
         "BMHD",
-        strpack(">I4", 20),
-        strpack(">I4", widthSprite << 0x10 | heightSprite),
-        strpack(">I4", 0 << 0x10 | 0), --xOrig, yOrig
+        strpack(">I4", 5 * 4),
+        strpack(">I4", widthSprite << 0x10 | heightSprite),           -- 1. image w, h
+        strpack(">I4", 0),                                            -- 2. xOrig, yOrig
+        strpack(">I4", planes << 0x10),                               -- 3. planes, mask, compression
+        strpack(">I4", alphaIndex << 10 | xAspect << 0x08 | yAspect), -- 4. alpha mask, px aspect ratio
+        strpack(">I4", widthSprite << 0x10 | heightSprite),           -- 5. page w, h
+        -- TODO: CAMG block.
     }
 
-    local binStr = table.concat(binStrs, "")
-    local lenBinStr = #binStr
-    local formLen = lenBinStr - 4
+    if writeCmap then
+        local clampedLenPalette = math.min(256, #palette)
+        binWords[#binWords + 1] = "CMAP"
+        binWords[#binWords + 1] = strpack(">I4", clampedLenPalette * 3)
+        local i = 0
+        while i < clampedLenPalette do
+            local aseColor = palette:getColor(i)
+            local rChar = strpack(">I2", aseColor.red)
+            local gChar = strpack(">I2", aseColor.green)
+            local bChar = strpack(">I2", aseColor.blue)
+            binWords[#binWords + 1] = rChar
+            binWords[#binWords + 1] = gChar
+            binWords[#binWords + 1] = bChar
+            i = i + 1
+        end
+    end
+
+    local flat = Image(spriteSpec)
+    flat:drawSprite(sprite, 1)
+
+    local binStr = table.concat(binWords, "")
+    -- TODO: Write formlen
+    -- local lenBinStr = #binStr
+    -- local formLen = lenBinStr - 4
     return binStr
 end
 
@@ -187,18 +255,23 @@ local function readFile(importFilepath, aspectResponse)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
 
+            -- Word 1.
             local wStr = strsub(binData, cursor + 8, cursor + 9)
             local hStr = strsub(binData, cursor + 10, cursor + 11)
             wImage = strunpack(">I2", wStr)
             hImage = strunpack(">I2", hStr)
+            wSprite = wImage
+            hSprite = hImage
             print(strfmt("width: %d", wImage))
             print(strfmt("height: %d", hImage))
 
+            -- Word 2.
             local planesStr = strsub(binData, cursor + 16, cursor + 16)
             local maskStr = strsub(binData, cursor + 17, cursor + 17)
             local comprStr = strsub(binData, cursor + 18, cursor + 18)
             local reservedStr = strsub(binData, cursor + 19, cursor + 19)
 
+            -- Word 3.
             planes = strunpack(">I1", planesStr)
             masking = strunpack(">I1", maskStr)
             compressed = strunpack(">I1", comprStr)
@@ -208,6 +281,7 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("compressed: %d", compressed))
             print(strfmt("reserved: %d", reserved))
 
+            -- Word 4.
             local trclStr = strsub(binData, cursor + 20, cursor + 21)
             local xAspStr = strsub(binData, cursor + 22, cursor + 22)
             local yAspStr = strsub(binData, cursor + 23, cursor + 23)
@@ -218,6 +292,7 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("xAspect: %d", xAspect))
             print(strfmt("yAspect: %d", yAspect))
 
+            -- Word 5.
             local pgwStr = strsub(binData, cursor + 24, cursor + 25)
             local pghStr = strsub(binData, cursor + 26, cursor + 27)
             wSprite = strunpack(">I2", pgwStr)
@@ -240,12 +315,12 @@ local function readFile(importFilepath, aspectResponse)
                 local r8 = strbyte(binData, cursor + 8 + i3)
                 local g8 = strbyte(binData, cursor + 9 + i3)
                 local b8 = strbyte(binData, cursor + 10 + i3)
-                print(strfmt("%03d: %03d %03d %03d, #%06x",
-                    i, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
                 local aseColor = Color { r = r8, g = g8, b = b8, a = 255 }
-
                 i = i + 1
                 aseColors[i] = aseColor
+
+                print(strfmt("%03d: %03d %03d %03d, #%06x",
+                    i, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
             end
 
             chunkLen = 8 + lenLocal
@@ -263,22 +338,6 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("flags: %d 0x%04x", flags, flags))
 
             extraHalfBrite = (flags & 0x80) ~= 0
-            if extraHalfBrite then
-                print("Extra Half Brite.")
-
-                local i = 0
-                while i < 32 do
-                    i = i + 1
-                    local aseColor = aseColors[i]
-                    local ehbColor = Color {
-                        r = aseColor.red >> 1,
-                        g = aseColor.green >> 1,
-                        b = aseColor.blue >> 1,
-                        a = 255
-                    }
-                    aseColors[32 + i] = ehbColor
-                end
-            end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
@@ -342,9 +401,9 @@ local function readFile(importFilepath, aspectResponse)
                 if span > 1 then
                     local rateStr = strsub(binData, cursor + 10, cursor + 11)
                     local rate = strunpack(">I2", rateStr)
-                    if rate > 0 then
-                        print(strfmt("rate: %d", rate))
+                    print(strfmt("rate: %d", rate))
 
+                    if rate > 0 then
                         colorCycles[#colorCycles + 1] = {
                             orig = orig,
                             dest = dest,
@@ -361,6 +420,25 @@ local function readFile(importFilepath, aspectResponse)
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
+
+            -- CAMG chunk may occur before CMAP chunk, so this needs to wait
+            -- until body to figure out...
+            if extraHalfBrite then
+                print("Extra Half Brite.")
+
+                local i = 0
+                while i < 32 do
+                    i = i + 1
+                    local aseColor = aseColors[i]
+                    local ehbColor = Color {
+                        r = aseColor.red >> 1,
+                        g = aseColor.green >> 1,
+                        b = aseColor.blue >> 1,
+                        a = 255
+                    }
+                    aseColors[32 + i] = ehbColor
+                end
+            end
 
             -- For decompression purposes, these bytes need to be signed?
             ---@type integer[]
@@ -524,23 +602,27 @@ local function readFile(importFilepath, aspectResponse)
 
     app.command.BackgroundFromLayer()
 
-    app.transaction(function()
-        local palette = sprite.palettes[1]
-        local lenAseColors = #aseColors
-        palette:resize(lenAseColors)
-        local i = 0
-        while i < lenAseColors do
-            i = i + 1
-            local aseColor = aseColors[i]
-            palette:setColor(i - 1, aseColor)
-        end
-    end)
+    local lenAseColors = #aseColors
+    if lenAseColors > 0 then
+        app.transaction(function()
+            local palette = sprite.palettes[1]
+            palette:resize(lenAseColors)
+            local i = 0
+            while i < lenAseColors do
+                i = i + 1
+                local aseColor = aseColors[i]
+                palette:setColor(i - 1, aseColor)
+            end
+        end)
+    else
+        -- TODO: Use color quantization command for true-color sprites?
+    end
 
     sprite.cels[1].image = stillImage
     sprite.filename = app.fs.filePathAndTitle(importFilepath)
 
     local lenColorCycles = #colorCycles
-    print(strfmt("lenColorCycles: %d", lenColorCycles))
+    print(strfmt("\nlenColorCycles: %d", lenColorCycles))
     if lenColorCycles > 0 then
         local activeLayer = sprite.layers[1]
 
@@ -572,7 +654,7 @@ local function readFile(importFilepath, aspectResponse)
 
             requiredFrames = lcm(requiredFrames, span)
         end
-        print(strfmt("\nLeast common multiple: %d", requiredFrames))
+        print(strfmt("Least common multiple: %d", requiredFrames))
 
         if requiredFrames <= defaults.maxFrames then
             -- Copy still image to new frames.
@@ -620,8 +702,8 @@ local function readFile(importFilepath, aspectResponse)
                                         local y = coord // wImage
                                         frImage:drawPixel(x, y, shifted)
                                     end -- End of pixels used by hex loop.
-                                end -- End of histogram array exists at key.
-                            end -- End current index not alpha.
+                                end     -- End of histogram array exists at key.
+                            end         -- End current index not alpha.
 
                             j = j + 1
                         end -- End of palette span loop.
