@@ -100,10 +100,8 @@ local function readFile(importFilepath, aspectResponse)
     local chunkLen = 4
 
     local colorMode = ColorMode.INDEXED
-    local widthImage = 0
-    local heightImage = 0
-    -- local xOrig = 0
-    -- local yOrig = 0
+    local wImage = 1
+    local hImage = 1
     local planes = 0
     -- TODO: Handle these enum cases better.
     -- mskNone an opaque image
@@ -115,8 +113,12 @@ local function readFile(importFilepath, aspectResponse)
     local alphaIndex = 0
     local xAspect = 1
     local yAspect = 1
-    local pageWidth = 1
-    local pageHeight = 1
+    local wSprite = 1
+    local hSprite = 1
+
+    local interlaced = false
+    local extraHalfBrite = false
+    local highRes = false
 
     ---@type {orig: integer, dest: integer, span: integer, isReverse: boolean}[]
     local colorCycles = {}
@@ -132,7 +134,7 @@ local function readFile(importFilepath, aspectResponse)
         local header = strsub(binData, cursor, cursor + 3)
         local headerlc = strlower(header)
         if headerlc == "form" then
-            print("\nFORM found. Cursor: %d.")
+            print(strfmt("\nFORM found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenInt = strunpack(">I4", lenStr)
             print(strfmt("lenInt: %d", lenInt))
@@ -151,10 +153,10 @@ local function readFile(importFilepath, aspectResponse)
 
             local wStr = strsub(binData, cursor + 8, cursor + 9)
             local hStr = strsub(binData, cursor + 10, cursor + 11)
-            widthImage = strunpack(">I2", wStr)
-            heightImage = strunpack(">I2", hStr)
-            print(strfmt("width: %d", widthImage))
-            print(strfmt("height: %d", heightImage))
+            wImage = strunpack(">I2", wStr)
+            hImage = strunpack(">I2", hStr)
+            print(strfmt("width: %d", wImage))
+            print(strfmt("height: %d", hImage))
 
             local planesStr = strsub(binData, cursor + 16, cursor + 16)
             local maskStr = strsub(binData, cursor + 17, cursor + 17)
@@ -182,10 +184,10 @@ local function readFile(importFilepath, aspectResponse)
 
             local pgwStr = strsub(binData, cursor + 24, cursor + 25)
             local pghStr = strsub(binData, cursor + 26, cursor + 27)
-            pageWidth = strunpack(">I2", pgwStr)
-            pageHeight = strunpack(">I2", pghStr)
-            print(strfmt("pageWidth: %d", pageWidth))
-            print(strfmt("pageHeight: %d", pageHeight))
+            wSprite = strunpack(">I2", pgwStr)
+            hSprite = strunpack(">I2", pghStr)
+            print(strfmt("pageWidth: %d", wSprite))
+            print(strfmt("pageHeight: %d", hSprite))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "cmap" then
@@ -212,12 +214,37 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "camg" then
-            -- TODO: This needs to be parsed for ham, hires, etc.
+            -- TODO: This needs to be parsed correctly for EHB (extra hi-brite).
+            -- TODO: This needs to parse correcly for HAM.
+
             -- Hires must impact aspect ratio, e.g., 20x11 should be 10x11?
             print(strfmt("\nCAMG found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
+
+            local flagsStr = strsub(binData, cursor + 8, cursor + 11)
+            local flags = strunpack(">I4", flagsStr)
+            print(strfmt("flags: %d 0x%04x", flags, flags))
+
+            extraHalfBrite = (flags & 0x80) ~= 0
+            if extraHalfBrite then
+                print("Extra Half Brite.")
+
+                local i = 0
+                while i < 32 do
+                    i = i + 1
+                    local aseColor = aseColors[i]
+                    local ehbColor = Color {
+                        r = aseColor.red >> 1,
+                        g = aseColor.green >> 1,
+                        b = aseColor.blue >> 1,
+                        a = 255
+                    }
+                    aseColors[32 + i] = ehbColor
+                end
+            end
+
             chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
             print(strfmt("\nCCRT found. Cursor: %d.", cursor))
@@ -226,7 +253,7 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("lenLocal: %d", lenLocal))
 
             local dirStr = strsub(binData, cursor + 8, cursor + 9)
-            local dir = strunpack(">I2", dirStr)
+            local dir = strunpack(">i2", dirStr)
             print(strfmt("dir: %d", dir))
 
             if dir ~= 0 then
@@ -367,11 +394,11 @@ local function readFile(importFilepath, aspectResponse)
                 -- if j >= 10 then return nil end
             end
 
-            local wordsPerRow = math.ceil(widthImage / 16)
+            local wordsPerRow = math.ceil(wImage / 16)
 
             -- TODO: Can all this be flattened?
             local y = 0
-            while y < heightImage do
+            while y < hImage do
                 ---@type integer[]
                 local pxRow = {}
                 local yWord = y * planes
@@ -381,7 +408,7 @@ local function readFile(importFilepath, aspectResponse)
                     local flatWord = (z + yWord) * wordsPerRow
 
                     local x = 0
-                    while x < widthImage do
+                    while x < wImage do
                         local xWord = x // 16
                         local word = words[1 + xWord + flatWord]
 
@@ -452,22 +479,15 @@ local function readFile(importFilepath, aspectResponse)
         cursor = cursor + chunkLen
     end
 
-    local widthSprite = widthImage
-    local heightSprite = heightImage
     local xaReduced, yaReduced = reduceRatio(xAspect, yAspect)
     xaReduced = math.min(math.max(xaReduced, 1), defaults.maxAspect)
     yaReduced = math.min(math.max(yaReduced, 1), defaults.maxAspect)
-    -- local useBake = aspectResponse == "BAKE"
-    -- if useBake then
-    --     widthSprite = widthImage * xaReduced
-    --     heightSprite = heightImage * yaReduced
-    -- end
 
     local sRGBColorSpace = ColorSpace { sRGB = true }
 
     local imageSpec = ImageSpec {
-        width = widthImage,
-        height = heightImage,
+        width = wImage,
+        height = hImage,
         colorMode = colorMode,
         transparentColor = alphaIndex
     }
@@ -476,16 +496,12 @@ local function readFile(importFilepath, aspectResponse)
     local stillImage = Image(imageSpec)
     local pxItr = stillImage:pixels()
     for pixel in pxItr do
-        pixel(pixels[1 + pixel.x + pixel.y * widthImage])
+        pixel(pixels[1 + pixel.x + pixel.y * wImage])
     end
 
-    -- if useBake then
-    --     stillImage:resize(widthSprite, heightSprite)
-    -- end
-
     local spriteSpec = ImageSpec {
-        width = widthSprite,
-        height = heightSprite,
+        width = wSprite,
+        height = hSprite,
         colorMode = colorMode,
         transparentColor = alphaIndex
     }
@@ -586,12 +602,9 @@ local function readFile(importFilepath, aspectResponse)
                             local k = 0
                             while k < lenUsedPixels do
                                 k = k + 1
-                                -- TODO: Problem with this is baked images that
-                                -- have been resized. Maybe use sprite size command
-                                -- or method?
                                 local coord = usedPixels[k]
-                                local x = coord % widthImage
-                                local y = coord // widthImage
+                                local x = coord % wImage
+                                local y = coord // wImage
                                 frImage:drawPixel(x, y, shifted)
                             end -- End of pixels used by hex loop.
                         end     -- End of histogram array exists at key.
@@ -602,6 +615,10 @@ local function readFile(importFilepath, aspectResponse)
             end         -- End of frame loop.
         end             --End of color cycles loop.
     end                 -- End of add color cycle data check.
+
+    if aspectResponse == "BAKE" then
+        sprite:resize(wSprite * xaReduced, hSprite * yaReduced)
+    end
 
     return sprite
 end
