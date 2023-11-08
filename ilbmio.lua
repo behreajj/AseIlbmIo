@@ -8,6 +8,42 @@ local defaults = {
     maxAspect = 16
 }
 
+---@param bytes integer[]
+---@return integer[]
+local function decompress(bytes)
+    ---@type integer[]
+    local decompressed = {}
+    local lenBytes = #bytes
+    local j = 0
+    while j < lenBytes do
+        local byte = bytes[1 + j]
+        local readStep = 1
+
+        -- The algorithm is adjusted for unsigned, as opposed to
+        -- signed bytes.
+        if byte > 128 then
+            local next = bytes[2 + j]
+            readStep = 2
+            local k = 0
+            while k < (257 - byte) do
+                decompressed[#decompressed + 1] = next
+                k = k + 1
+            end
+        elseif byte < 128 then
+            local k = 0
+            while k < (byte + 1) do
+                decompressed[#decompressed + 1] = bytes[2 + j + k]
+                k = k + 1
+                readStep = readStep + 1
+            end
+        end
+
+        j = j + readStep
+    end
+
+    return decompressed
+end
+
 ---@param a integer
 ---@param b integer
 ---@return integer
@@ -116,9 +152,8 @@ local function readFile(importFilepath, aspectResponse)
     local wSprite = 1
     local hSprite = 1
 
-    local interlaced = false
+    local isPbm = false
     local extraHalfBrite = false
-    local highRes = false
 
     ---@type {orig: integer, dest: integer, span: integer, isReverse: boolean}[]
     local colorCycles = {}
@@ -144,6 +179,7 @@ local function readFile(importFilepath, aspectResponse)
             chunkLen = 4
         elseif headerlc == "pbm " then
             print(strfmt("\nPBM found. Cursor: %d.", cursor))
+            isPbm = true
             chunkLen = 4
         elseif headerlc == "bmhd" then
             print(strfmt("\nBMHD found. Cursor: %d.", cursor))
@@ -214,7 +250,6 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "camg" then
-            -- TODO: This needs to be parsed correctly for EHB (extra hi-brite).
             -- TODO: This needs to parse correcly for HAM.
 
             -- Hires must impact aspect ratio, e.g., 20x11 should be 10x11?
@@ -318,6 +353,7 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "body" then
+            -- TODO: Treat PBM bodies differently.
             print(strfmt("\nBODY found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
@@ -337,40 +373,7 @@ local function readFile(importFilepath, aspectResponse)
             end
 
             if compressed == 1 then
-                print("Decompressing image.")
-
-                ---@type integer[]
-                local decompressed = {}
-
-                local j = 0
-                while j < lenLocal do
-                    local byte = bytes[1 + j]
-                    local readStep = 1
-
-                    -- The algorithm is adjusted for unsigned, as opposed to
-                    -- signed bytes.
-                    if byte > 128 then
-                        local next = bytes[2 + j]
-                        readStep = 2
-                        local k = 0
-                        while k < (257 - byte) do
-                            decompressed[#decompressed + 1] = next
-                            k = k + 1
-                        end
-                    elseif byte < 128 then
-                        local k = 0
-                        while k < (byte + 1) do
-                            decompressed[#decompressed + 1] = bytes[2 + j + k]
-                            k = k + 1
-                            readStep = readStep + 1
-                        end
-                    end
-
-                    j = j + readStep
-                end
-
-                bytes = decompressed
-                print(strfmt("lenDecompressed: %d", #bytes))
+                bytes = decompress(bytes)
             end
 
             ---@type integer[]
