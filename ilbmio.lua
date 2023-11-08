@@ -19,6 +19,13 @@ end
 ---@param a integer
 ---@param b integer
 ---@return integer
+local function lcm(a, b)
+    return (a // gcd(a, b)) * b
+end
+
+---@param a integer
+---@param b integer
+---@return integer
 ---@return integer
 local function reduceRatio(a, b)
     local denom <const> = gcd(a, b)
@@ -111,7 +118,7 @@ local function readFile(importFilepath, aspectResponse)
     local pageWidth = 1
     local pageHeight = 1
 
-    ---@type {orig: integer, dest: integer, isReverse: boolean}[]
+    ---@type {orig: integer, dest: integer, span: integer, isReverse: boolean}[]
     local colorCycles = {}
 
     ---@type Color[]
@@ -213,27 +220,16 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("lenLocal: %d", lenLocal))
             chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
-
-            --[[
-            typedef struct {
-            WORD  direction;    /* 0 = don't cycle.  1 = cycle forwards      */
-            /* (1, 2, 3). -1 = cycle backwards (3, 2, 1) */
-            UBYTE start, end;   /* lower and upper color registers selected  */
-            LONG  seconds;      /* # seconds between changing colors plus... */
-            LONG  microseconds; /* # microseconds between changing colors    */
-            WORD  pad;          /* reserved for future use; store 0 here     */
-            } CycleInfo;
-            ]]
             print(strfmt("\nCCRT found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("lenLocal: %d", lenLocal))
 
-            local flagsStr = strsub(binData, cursor + 8, cursor + 9)
-            local flags = strunpack(">I2", flagsStr)
-            print(strfmt("flags: %d 0x%04x", flags, flags))
+            local dirStr = strsub(binData, cursor + 8, cursor + 9)
+            local dir = strunpack(">I2", dirStr)
+            print(strfmt("dir: %d", dir))
 
-            if (flags & 1) ~= 0  then
+            if dir ~= 0 then
                 local origStr = strsub(binData, cursor + 10, cursor + 10)
                 local destStr = strsub(binData, cursor + 11, cursor + 11)
 
@@ -243,11 +239,15 @@ local function readFile(importFilepath, aspectResponse)
                 print(strfmt("orig: %d", orig))
                 print(strfmt("dest: %d", dest))
 
-                colorCycles[#colorCycles + 1] = {
-                    orig = orig,
-                    dest = dest,
-                    isReverse = ((flags >> 1) & 1) ~= 0
-                }
+                local span = 1 + dest - orig
+                if span > 1 then
+                    colorCycles[#colorCycles + 1] = {
+                        orig = orig,
+                        dest = dest,
+                        span = span,
+                        isReverse = dir < 0
+                    }
+                end
             end
 
             chunkLen = 8 + lenLocal
@@ -264,37 +264,29 @@ local function readFile(importFilepath, aspectResponse)
                 print("isReversed")
             end
 
-            -- TOOD: Figure out parsing flags.
-            -- "if the low bit is set then the cycle is “active”, and if this
-            -- bit is clear it is not active. Normally, color cycling is done
-            -- so that colors move to the next higher position in the cycle,
-            -- with the color in the high slot moving around to the low slot.
-            -- If the second bit of the flags word is set, the cycle moves in
-            -- the opposite direction."
             if (flags & 1) ~= 0 then
                 local origStr = strsub(binData, cursor + 14, cursor + 14)
                 local destStr = strsub(binData, cursor + 15, cursor + 15)
-                local rateStr = strsub(binData, cursor + 10, cursor + 11)
 
                 local orig = strunpack(">I1", origStr)
                 local dest = strunpack(">I1", destStr)
-                local rate = strunpack(">I2", rateStr)
 
                 print(strfmt("orig: %d", orig))
                 print(strfmt("dest: %d", dest))
-                print(strfmt("rate: %d", rate))
 
-                -- TODO: Figure out duration.
-                -- "The field rate determines the speed at which the colors
-                -- will step when color cycling is on. The units are such that
-                -- a rate of 60 steps per second is represented as 2^14 = 16384.
-                -- Slower rates can be obtained by linear scaling: for 30 steps/
-                -- second, rate = 8192; for 1 step/second, rate = 16384/60 ~273."
-                colorCycles[#colorCycles + 1] = {
-                    orig = orig,
-                    dest = dest,
-                    isReverse = ((flags >> 1) & 1) ~= 0
-                }
+                local span = 1 + dest - orig
+                if span > 1 then
+                    local rateStr = strsub(binData, cursor + 10, cursor + 11)
+                    local rate = strunpack(">I2", rateStr)
+                    print(strfmt("rate: %d", rate))
+
+                    colorCycles[#colorCycles + 1] = {
+                        orig = orig,
+                        dest = dest,
+                        span = span,
+                        isReverse = ((flags >> 1) & 1) ~= 0
+                    }
+                end
             end
 
             chunkLen = 8 + lenLocal
@@ -522,77 +514,94 @@ local function readFile(importFilepath, aspectResponse)
     sprite.filename = app.fs.filePathAndTitle(importFilepath)
 
     local lenColorCycles = #colorCycles
+    print(strfmt("lenColorCycles: %d", lenColorCycles))
     if lenColorCycles > 0 then
         local activeLayer = sprite.layers[1]
 
+        -- Create a dictionary where a palette index, the key, is assigned an
+        -- array of all the flattened coordinates (i=x + y * w) where the index
+        -- is used.
         ---@type table<integer, integer[]>
         local histogram = {}
         local lenPixels = #pixels
-        local g = 0
-        while g < lenPixels do
-            local palIdx = pixels[1 + g]
+        local e = 0
+        while e < lenPixels do
+            local palIdx = pixels[1 + e]
             local arr = histogram[palIdx]
             if arr then
-                arr[#arr + 1] = g
+                arr[#arr + 1] = e
             else
-                histogram[palIdx] = { g }
+                histogram[palIdx] = { e }
             end
-            g = g + 1
+            e = e + 1
         end
+
+        -- Find least common multiple so that color cycles can repeat.
+        local requiredFrames = 1
+        local f = 0
+        while f < lenColorCycles do
+            f = f + 1
+            local colorCycle = colorCycles[f]
+            local span = colorCycle.span
+
+            requiredFrames = lcm(requiredFrames, span)
+        end
+        print(strfmt("Least common multiple: %d", requiredFrames))
+
+        -- Copy still image to new frames.
+        app.transaction(function()
+            local g = 1
+            while g < requiredFrames do
+                g = g + 1
+                local frObj = sprite:newEmptyFrame()
+                sprite:newCel(activeLayer, frObj, stillImage)
+            end
+        end)
 
         local h = 0
         while h < lenColorCycles do
             h = h + 1
             local colorCycle = colorCycles[h]
             local palIdxOrig = colorCycle.orig
-            local palIdxDest = colorCycle.dest
+            local palSpan = colorCycle.span
             local isReverse = colorCycle.isReverse
             local palIncr = -1
             if isReverse then palIncr = 1 end
-            local palSpan = 1 + palIdxDest - palIdxOrig
 
-            local i = 1
-            while i < palSpan do
-                i = i + 1
-                -- TODO: You'll probably have to create frames in advance based
-                -- least common multiple of color cycle lengths, so that one
-                -- doesn't stall out while others continue...
-                local frObj = nil
-                if i > #sprite.frames then
-                    frObj = sprite:newEmptyFrame()
-                else
-                    frObj = sprite.frames[i]
-                end
+            local frIdx = 1
+            while frIdx < requiredFrames do
+                frIdx = frIdx + 1
 
-                local shift = (i - 1) * palIncr
-                local frImage = stillImage:clone()
+                local shift = (frIdx - 1) * palIncr
+                local cel = activeLayer:cel(frIdx)
+                if cel then
+                    local frImage = cel.image
 
-                local j = 0
-                while j < palSpan do
-                    local shifted = palIdxOrig + (j + shift) % palSpan
-                    local usedPixels = histogram[palIdxOrig + j]
-                    if usedPixels then
-                        local lenUsedPixels = #usedPixels
-                        local k = 0
-                        while k < lenUsedPixels do
-                            k = k + 1
-                            -- TODO: Problem with this is baked images that
-                            -- have been resized. Maybe use sprite size command
-                            -- or method?
-                            local coord = usedPixels[k]
-                            local x = coord % widthImage
-                            local y = coord // widthImage
-                            frImage:drawPixel(x, y, shifted)
-                        end
-                    end
+                    local j = 0
+                    while j < palSpan do
+                        local usedPixels = histogram[palIdxOrig + j]
+                        if usedPixels then
+                            local shifted = palIdxOrig + (j + shift) % palSpan
+                            local lenUsedPixels = #usedPixels
+                            local k = 0
+                            while k < lenUsedPixels do
+                                k = k + 1
+                                -- TODO: Problem with this is baked images that
+                                -- have been resized. Maybe use sprite size command
+                                -- or method?
+                                local coord = usedPixels[k]
+                                local x = coord % widthImage
+                                local y = coord // widthImage
+                                frImage:drawPixel(x, y, shifted)
+                            end -- End of pixels used by hex loop.
+                        end     -- End of histogram array exists at key.
 
-                    j = j + 1
-                end
-
-                sprite:newCel(activeLayer, frObj, frImage)
-            end
-        end
-    end
+                        j = j + 1
+                    end -- End of palette span loop.
+                end     -- End of cel exists check.
+            end         -- End of frame loop.
+        end             --End of color cycles loop.
+    end                 -- End of add color cycle data check.
 
     return sprite
 end
