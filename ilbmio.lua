@@ -20,8 +20,7 @@ local function decompress(bytes)
         local byte = bytes[1 + j]
         local readStep = 1
 
-        -- The algorithm is adjusted for unsigned, as opposed to
-        -- signed bytes.
+        -- The algorithm is adjusted for unsigned bytes, not signed.
         if byte > 128 then
             local next = bytes[2 + j]
             readStep = 2
@@ -327,6 +326,8 @@ local function readFile(importFilepath, aspectResponse)
                 print("isReversed")
             end
 
+            -- In many test files, these CRNG tags contain crud data, such as
+            -- zero flags, orig and dest being equal, or rate being zero.
             if (flags & 1) ~= 0 then
                 local origStr = strsub(binData, cursor + 14, cursor + 14)
                 local destStr = strsub(binData, cursor + 15, cursor + 15)
@@ -341,14 +342,16 @@ local function readFile(importFilepath, aspectResponse)
                 if span > 1 then
                     local rateStr = strsub(binData, cursor + 10, cursor + 11)
                     local rate = strunpack(">I2", rateStr)
-                    print(strfmt("rate: %d", rate))
+                    if rate > 0 then
+                        print(strfmt("rate: %d", rate))
 
-                    colorCycles[#colorCycles + 1] = {
-                        orig = orig,
-                        dest = dest,
-                        span = span,
-                        isReverse = ((flags >> 1) & 1) ~= 0
-                    }
+                        colorCycles[#colorCycles + 1] = {
+                            orig = orig,
+                            dest = dest,
+                            span = span,
+                            isReverse = ((flags >> 1) & 1) ~= 0
+                        }
+                    end
                 end
             end
 
@@ -603,19 +606,22 @@ local function readFile(importFilepath, aspectResponse)
 
                         local j = 0
                         while j < palSpan do
-                            local usedPixels = histogram[palIdxOrig + j]
-                            if usedPixels then
-                                local shifted = palIdxOrig + (j + shift) % palSpan
-                                local lenUsedPixels = #usedPixels
-                                local k = 0
-                                while k < lenUsedPixels do
-                                    k = k + 1
-                                    local coord = usedPixels[k]
-                                    local x = coord % wImage
-                                    local y = coord // wImage
-                                    frImage:drawPixel(x, y, shifted)
-                                end -- End of pixels used by hex loop.
-                            end     -- End of histogram array exists at key.
+                            local currIdx = palIdxOrig + j
+                            if currIdx ~= alphaIndex then
+                                local usedPixels = histogram[currIdx]
+                                if usedPixels then
+                                    local shifted = palIdxOrig + (j + shift) % palSpan
+                                    local lenUsedPixels = #usedPixels
+                                    local k = 0
+                                    while k < lenUsedPixels do
+                                        k = k + 1
+                                        local coord = usedPixels[k]
+                                        local x = coord % wImage
+                                        local y = coord // wImage
+                                        frImage:drawPixel(x, y, shifted)
+                                    end -- End of pixels used by hex loop.
+                                end -- End of histogram array exists at key.
+                            end -- End current index not alpha.
 
                             j = j + 1
                         end -- End of palette span loop.
