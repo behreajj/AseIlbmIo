@@ -1,6 +1,7 @@
 local uiAvailable = app.isUIAvailable
 
-local fileTypes = { "anim", "iff", "ilbm", "lbm" }
+local importFileTypes = { "iff", "ilbm", "lbm" }
+local exportFileTypes = { "ilbm", "lbm" }
 local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
@@ -70,25 +71,62 @@ local function reduceRatio(a, b)
     return a // denom, b // denom
 end
 
+---@param x integer
+---@return integer
+local function nextPowerOf2(x)
+    if x ~= 0 then
+        local xSgn = 1
+        local xAbs = x
+        if x < 0 then
+            xAbs = -x
+            xSgn = -1
+        end
+        local p = 1
+        while p < xAbs do
+            p = p << 1
+        end
+        return p * xSgn
+    end
+    return 0
+end
+
 ---@param sprite Sprite
+---@param frObj Frame
 ---@param isPbm boolean
 ---@return string
-local function writeFile(sprite, isPbm)
+local function writeFile(sprite, frObj, isPbm)
+    -- Cache methods.
     local strpack = string.pack
+    local strchar = string.char
+    local abs = math.abs
+    local ceil = math.ceil
+    local log = math.log
+    local max = math.max
+    local min = math.min
+
+    -- Unpack sprite.
     local spriteSpec = sprite.spec
+    local palettes = sprite.palettes
+    local pxRatio = sprite.pixelRatio
+
+    -- Unpack sprite spec.
+    -- Sprites need to be 320x200 or so in order to load...
     local wSprite = spriteSpec.width
     local hSprite = spriteSpec.height
     local alphaIndex = spriteSpec.transparentColor
-    local pxRatio = sprite.pixelRatio
-    local xAspect = math.max(1, math.abs(pxRatio.w))
-    local yAspect = math.max(1, math.abs(pxRatio.h))
+    local colorMode = spriteSpec.colorMode
+
+    -- Unpack sprite pixel aspect.
+    local xAspect = max(1, abs(pxRatio.w))
+    local yAspect = max(1, abs(pxRatio.h))
 
     local palette = nil
     local planes = 8
-    local colorMode = spriteSpec.colorMode
     local writeCmap = true
     local writeTrueColor24 = false
     local writeTrueColor32 = false
+    local lenPaletteActual = 0
+
     if colorMode == ColorMode.RGB then
         -- TODO: How to handle this case? Maybe make a dummy sprite copy, then
         -- convert to index, then close when this process is done?
@@ -109,6 +147,7 @@ local function writeFile(sprite, isPbm)
             i = i + 1
         end
         planes = 8
+        lenPaletteActual = 256
     else
         -- Assume indexed color is the default.
         -- 2 ^ 1 =   2
@@ -119,9 +158,13 @@ local function writeFile(sprite, isPbm)
         -- 2 ^ 6 =  64
         -- 2 ^ 7 = 128
         -- 2 ^ 8 = 256
-        palette = sprite.palettes[1]
-        local lenPalette = #palette
-        planes = math.max(1, math.ceil(math.log(lenPalette, 2)))
+        local palIdx = 1
+        local frIdx = frObj.frameNumber
+        local lenPalettes = #palettes
+        if frIdx <= lenPalettes then palIdx = frIdx end
+        palette = palettes[palIdx]
+        lenPaletteActual = #palette
+        planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
     end
 
     local formatHeader = "ILBM"
@@ -131,50 +174,70 @@ local function writeFile(sprite, isPbm)
     if isPbm then
         lenBodyData = wSprite * hSprite
     else
-        local wordsPerRow = math.ceil(wSprite / 16)
+        local wordsPerRow = ceil(wSprite / 16)
         local charsPerRow = wordsPerRow * 2
         lenBodyData = hSprite * planes * charsPerRow
     end
 
-    -- TODO: Precalculate CMAP length.
     local lenCmapData = 0
     if writeCmap then
-
+        lenCmapData = 3 * nextPowerOf2(min(256, lenPaletteActual))
     end
 
-    -- TODO: Precalculate form length.
+    local formLength = 0 -- Form header
+        + 4              -- ILBM/PBM header
+        + 8              -- BMHD header
+        + 20             -- BMHD content
+    if writeCmap then
+        formLength = formLength + 8 + lenCmapData
+    end
+    formLength = formLength + 8 + lenBodyData
 
     ---@type string[]
     local binWords = {
         "FORM",
-        strpack(">I4", 0), -- TODO: Place precalculated form length here.
+        strpack(">I4", formLength),
         formatHeader,
         "BMHD",
-        strpack(">I4", 5 * 4),                                        -- Chunk length.
-        strpack(">I4", wSprite << 0x10 | hSprite),                    -- 1. image w, h
-        strpack(">I4", 0),                                            -- 2. xOrig, yOrig
-        strpack(">I4", planes << 0x10),                               -- 3. planes, mask, compression
+        strpack(">I4", 20),                                           -- Chunk length. (5 words * 4)
+        strpack(">I2", wSprite),                                      -- 1. width
+        strpack(">I2", hSprite),                                      -- 1. height
+        strpack(">I2", 0),                                            -- 2. xOrig
+        strpack(">I2", 0),                                            -- 2. yOrig
+        strpack(">I4", planes << 0x18),                               -- 3. planes, mask, compression
         strpack(">I4", alphaIndex << 10 | xAspect << 0x08 | yAspect), -- 4. alpha mask, px aspect ratio
-        strpack(">I4", wSprite << 0x10 | hSprite),                    -- 5. page w, h
+        strpack(">I2", wSprite),                                      -- 5. page width
+        strpack(">I2", hSprite),                                      -- 5. page height
     }
 
     if writeCmap then
-        -- TODO: Raise palette length to nearest power of two, pad out if necessary?
-        local clampedLenPalette = math.min(256, #palette)
         binWords[#binWords + 1] = "CMAP"
-        binWords[#binWords + 1] = strpack(">I4", clampedLenPalette * 3)
+        binWords[#binWords + 1] = strpack(">I4", lenCmapData)
+
         local i = 0
-        while i < clampedLenPalette do
+        local lenPaletteClamped = min(256, lenPaletteActual)
+        while i < lenPaletteClamped do
             local aseColor = palette:getColor(i)
-            local rChar = strpack(">I2", aseColor.red)
-            local gChar = strpack(">I2", aseColor.green)
-            local bChar = strpack(">I2", aseColor.blue)
+            local rChar = strchar(aseColor.red)
+            local gChar = strchar(aseColor.green)
+            local bChar = strchar(aseColor.blue)
             binWords[#binWords + 1] = rChar
             binWords[#binWords + 1] = gChar
             binWords[#binWords + 1] = bChar
             i = i + 1
         end
+
+        local expectedPalette = lenCmapData // 3
+        while i < expectedPalette do
+            binWords[#binWords + 1] = strchar(0)
+            binWords[#binWords + 1] = strchar(0)
+            binWords[#binWords + 1] = strchar(0)
+            i = i + 1
+        end
     end
+
+    binWords[#binWords + 1] = "BODY"
+    binWords[#binWords + 1] = strpack(">I4", lenBodyData)
 
     local flat = Image(spriteSpec)
     flat:drawSprite(sprite, 1)
@@ -182,20 +245,13 @@ local function writeFile(sprite, isPbm)
     if isPbm then
         for pixel in pxItr do
             local idx = pixel()
-            binWords[#binWords + 1] = idx
+            binWords[#binWords + 1] = strchar(idx)
         end
     else
         -- TODO: IMPLEMENT
     end
 
-    binWords[#binWords + 1] = "BODY"
-    binWords[#binWords + 1] = strpack(">I4", lenBodyData)
-    binWords[#binWords + 1] = strpack(">I4", 0)
-
     local binStr = table.concat(binWords, "")
-    -- TODO: Write formlen
-    -- local lenBinStr = #binStr
-    -- local formLen = lenBinStr - 4
     return binStr
 end
 
@@ -290,10 +346,10 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("\nPBM found. Cursor: %d.", cursor))
             isPbm = true
             chunkLen = 4
-        elseif headerlc == "anim" then
-            print(strfmt("\nANIM found. Cursor: %d.", cursor))
-            isPbm = true
-            chunkLen = 4
+            -- elseif headerlc == "anim" then
+            --     print(strfmt("\nANIM found. Cursor: %d.", cursor))
+            --     isPbm = true
+            --     chunkLen = 4
         elseif headerlc == "bmhd" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
@@ -365,8 +421,8 @@ local function readFile(importFilepath, aspectResponse)
                 i = i + 1
                 aseColors[i] = aseColor
 
-                -- print(strfmt("%03d: %03d %03d %03d, #%06x",
-                --     i - 1, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
+                print(strfmt("%03d: %03d %03d %03d, #%06x",
+                    i - 1, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
             end
 
             chunkLen = 8 + lenLocal
@@ -481,8 +537,8 @@ local function readFile(importFilepath, aspectResponse)
         elseif headerlc == "body" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nBODY found. Cursor: %d.", cursor))
-            print(strfmt("lenLocal: %d", lenLocal))
+            print(strfmt("\nBODY found. Cursor: %d.\nlenLocal: %d",
+                cursor, lenLocal))
 
             bodyFound = true
 
@@ -600,33 +656,48 @@ local function readFile(importFilepath, aspectResponse)
             -- Author.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("AUTH found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
             chunkLen = 8 + lenLocal
         elseif headerlc == "anno" then
             -- Annotation.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("ANNO found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
             chunkLen = 8 + lenLocal
         elseif headerlc == "dpi " then
             -- Divets per inch.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("DPI found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
             chunkLen = 8 + lenLocal
         elseif headerlc == "dpps" then
             -- Don't know what this is, but it's found in the King Tut image.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("DPPS found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
             chunkLen = 8 + lenLocal
         elseif headerlc == "dppv" then
             -- Perspective and transformation.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("DDPV found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
             chunkLen = 8 + lenLocal
         elseif headerlc == "tiny" then
             -- Thumbnail.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("TINY found. Cursor: %d", cursor))
-            print(strfmt("lenLocal: %d", lenLocal))
+            print(strfmt("TINY found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
 
@@ -834,7 +905,7 @@ dlg:newrow { always = false }
 dlg:file {
     id = "importFilepath",
     label = "Open:",
-    filetypes = fileTypes,
+    filetypes = importFileTypes,
     open = true,
     focus = true
 }
@@ -884,6 +955,75 @@ dlg:button {
             app.command.FitScreen()
             app.refresh()
         end
+    end
+}
+
+dlg:separator { id = "exportSep" }
+
+dlg:file {
+    id = "exportFilepath",
+    label = "Save:",
+    filetypes = exportFileTypes,
+    save = true,
+    focus = false
+}
+
+dlg:newrow { always = false }
+
+dlg:button {
+    id = "export",
+    text = "&EXPORT",
+    focus = false,
+    onclick = function()
+        ---@diagnostic disable-next-line: deprecated
+        local activeSprite = app.activeSprite
+        if not activeSprite then
+            app.alert {
+                title = "Error",
+                text = "There is no active sprite."
+            }
+            return
+        end
+
+        ---@diagnostic disable-next-line: deprecated
+        local activeFrame = app.activeFrame
+        if not activeFrame then
+            app.alert {
+                title = "Error",
+                text = "There is no active frame."
+            }
+            return
+        end
+
+        -- Check for invalid file path.
+        local args = dlg.data
+        local exportFilepath = args.exportFilepath --[[@as string]]
+        if (not exportFilepath) or #exportFilepath < 1 then
+            app.alert {
+                title = "Error",
+                text = "Empty file path."
+            }
+            return
+        end
+
+        local binFile, err = io.open(exportFilepath, "wb")
+        if err ~= nil then
+            if binFile then binFile:close() end
+            app.alert { title = "Error", text = err }
+            return
+        end
+        if binFile == nil then return end
+
+        local fileExt = string.lower(app.fs.fileExtension(exportFilepath))
+        local isPbm = fileExt == "lbm"
+        local binStr = writeFile(activeSprite, activeFrame, isPbm)
+        binFile:write(binStr)
+        binFile:close()
+
+        app.alert {
+            title = "Success",
+            text = "File exported."
+        }
     end
 }
 
