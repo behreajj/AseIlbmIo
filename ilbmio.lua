@@ -9,7 +9,9 @@ local defaults = {
     -- https://www.wikiwand.com/en/LHA_(file_format)
     aspectResponse = "SPRITE_RATIO",
     maxAspect = 16,
-    maxFrames = 512
+    maxFrames = 512,
+    wMax = 640,
+    hMax = 640,
 }
 
 ---@param bytes integer[]
@@ -100,7 +102,6 @@ local function writeFile(sprite, frObj, isPbm)
     local strchar = string.char
     local abs = math.abs
     local ceil = math.ceil
-    local log = math.log
     local max = math.max
     local min = math.min
 
@@ -110,49 +111,38 @@ local function writeFile(sprite, frObj, isPbm)
     local pxRatio = sprite.pixelRatio
 
     -- Unpack sprite spec.
-    local wSprite = spriteSpec.width
-    local hSprite = spriteSpec.height
+    local wSprite = min(defaults.wMax, spriteSpec.width)
+    local hSprite = min(defaults.hMax, spriteSpec.height)
     local alphaIndex = spriteSpec.transparentColor
-    local colorMode = spriteSpec.colorMode
 
     -- Unpack sprite pixel aspect.
     local xAspect = max(1, abs(pxRatio.w))
     local yAspect = max(1, abs(pxRatio.h))
 
-    local palette = nil
+    -- No. of Planes = log(lenPalette, 2)
+    -- 2 ^ 1 =   2, 2 ^ 5 =  32
+    -- 2 ^ 2 =   4, 2 ^ 6 =  64
+    -- 2 ^ 3 =   8, 2 ^ 7 = 128
+    -- 2 ^ 4 =  16, 2 ^ 8 = 256
     local planes = 8
+
+    ---@type integer[]
+    local pixels = {}
+    local palette = nil
+    local lenPixels = 0
     local writeCmap = true
-    local writeTrueColor24 = false
-    local writeTrueColor32 = false
     local lenPaletteActual = 0
 
-    if colorMode == ColorMode.RGB then
-        -- TODO: How to handle this case? Maybe make a dummy sprite copy, then
-        -- convert to index, then close when this process is done?
-        palette = sprite.palettes[1]
-        if sprite.backgroundLayer then
-            planes = 24
-            writeTrueColor24 = true
-        else
-            planes = 32
-            writeTrueColor32 = true
-        end
-        writeCmap = false
-    elseif colorMode == ColorMode.GRAY then
-        palette = Palette(256)
-        local i = 0
-        while i < 256 do
-            palette:setColor(i, Color { r = i, g = i, b = i, a = 255 })
-            i = i + 1
-        end
-        planes = 8
-        lenPaletteActual = 256
-    else
-        -- Assume indexed color is the default.
-        -- 2 ^ 1 =   2, 2 ^ 5 =  32
-        -- 2 ^ 2 =   4, 2 ^ 6 =  64
-        -- 2 ^ 3 =   8, 2 ^ 7 = 128
-        -- 2 ^ 4 =  16, 2 ^ 8 = 256
+    local flatSpec = ImageSpec {
+        width = wSprite,
+        height = hSprite,
+        colorMode = ColorMode.INDEXED,
+        transparentColor = alphaIndex
+    }
+    flatSpec.colorSpace = spriteSpec.colorSpace
+    local flat = Image(flatSpec)
+
+    if spriteSpec.colorMode == ColorMode.INDEXED then
         local palIdx = 1
         local frIdx = frObj.frameNumber
         local lenPalettes = #palettes
@@ -160,32 +150,68 @@ local function writeFile(sprite, frObj, isPbm)
         palette = palettes[palIdx]
         lenPaletteActual = #palette
 
-        if isPbm then
-            planes = 8
-        else
-            -- This might be causing problems with images being unable to load
-            -- in Irfanview.
-            planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
+        flat:drawSprite(sprite, 1)
+        local pxItr = flat:pixels()
+        for pixel in pxItr do
+            lenPixels = lenPixels + 1
+            pixels[lenPixels] = pixel()
         end
-    end
 
-    local formatHeader = "ILBM"
-    if isPbm then formatHeader = "PBM " end
+        -- This might be causing problems with images being unable to load
+        -- in Irfanview.
+        -- planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
+    else
+        local dupe = Sprite(sprite)
+        app.activeSprite = dupe
+
+        app.command.CanvasSize {
+            ui = false,
+            left = 0,
+            top = 0,
+            right = defaults.wMax,
+            bottom = defaults.hMax,
+            trimOutside = true
+        }
+        app.command.FlattenLayers { visibleOnly = true }
+        app.command.BackgroundFromLayer()
+        app.command.ColorQuantization {
+            ui = false,
+            maxColors = 256,
+            withAlpha = false
+        }
+        app.command.ChangePixelFormat {
+            ui = false,
+            format = "indexed",
+            dithering = "ordered"
+        }
+
+        local dupePalette = dupe.palettes[1]
+        lenPaletteActual = #dupePalette
+        palette = Palette(lenPaletteActual)
+        local i = 0
+        while i < lenPaletteActual do
+            palette:setColor(i, dupePalette:getColor(i))
+            i = i + 1
+        end
+
+        flat:drawSprite(dupe, 1)
+        local pxItr = flat:pixels()
+        for pixel in pxItr do
+            lenPixels = lenPixels + 1
+            pixels[lenPixels] = pixel()
+        end
+
+        dupe:close()
+        app.activeSprite = sprite
+    end
 
     -- Do sprites need to be some proportion in order to load in Irfanview?
-    -- local wsnp2 = max(wSprite, 320)
-    -- local hsnp2 = max(hSprite, 200)
-    local wsnp2 = wSprite
-    local hsnp2 = hSprite
-
-    local lenBodyData = 0
-    if isPbm then
-        lenBodyData = wsnp2 * hsnp2
-    else
-        local wordsPerRow = ceil(wsnp2 / 16)
-        local charsPerRow = wordsPerRow * 2
-        lenBodyData = hsnp2 * planes * charsPerRow
-    end
+    local formatHeader = isPbm and "PBM " or "ILBM"
+    local wordsPerRow = ceil(wSprite / 16)
+    local charsPerRow = wordsPerRow * 2
+    local lenBodyData = isPbm
+        and wSprite * hSprite
+        or hSprite * planes * charsPerRow
 
     local lenCmapData = 0
     if writeCmap then
@@ -193,7 +219,7 @@ local function writeFile(sprite, frObj, isPbm)
     end
 
     local formLength = 0 -- Form header (excluded)
-        + 4              -- ILBM/PBM header
+        + 4              -- ILBM / PBM header
         + 8              -- BMHD header
         + 20             -- BMHD content
     if writeCmap then
@@ -208,14 +234,14 @@ local function writeFile(sprite, frObj, isPbm)
         formatHeader,
         "BMHD",
         strpack(">I4", 20),                                           -- Chunk length. (5 words * 4)
-        strpack(">I2", wsnp2),                                        -- 1. width
-        strpack(">I2", hsnp2),                                        -- 1. height
+        strpack(">I2", wSprite),                                      -- 1. width
+        strpack(">I2", hSprite),                                      -- 1. height
         strpack(">I2", 0),                                            -- 2. xOrig
         strpack(">I2", 0),                                            -- 2. yOrig
         strpack(">I4", planes << 0x18),                               -- 3. planes, mask, compression
         strpack(">I4", alphaIndex << 10 | xAspect << 0x08 | yAspect), -- 4. alpha mask, px aspect ratio
-        strpack(">I2", wsnp2),                                        -- 5. page width
-        strpack(">I2", hsnp2),                                        -- 5. page height
+        strpack(">I2", wSprite),                                      -- 5. page width
+        strpack(">I2", hSprite),                                      -- 5. page height
     }
 
     if writeCmap then
@@ -248,23 +274,31 @@ local function writeFile(sprite, frObj, isPbm)
     binWords[#binWords + 1] = "BODY"
     binWords[#binWords + 1] = strpack(">I4", lenBodyData)
 
-    local flatSpec = ImageSpec {
-        width = wsnp2,
-        height = hsnp2,
-        colorMode = colorMode,
-        transparentColor = alphaIndex
-    }
-    flatSpec.colorSpace = spriteSpec.colorSpace
-    local flat = Image(flatSpec)
-    flat:drawSprite(sprite, 1)
-    local pxItr = flat:pixels()
     if isPbm then
-        for pixel in pxItr do
-            local idx = pixel()
-            binWords[#binWords + 1] = strchar(idx)
+        local j = 0
+        while j < lenPixels do
+            j = j + 1
+            binWords[#binWords + 1] = strchar(pixels[j])
         end
     else
         -- TODO: IMPLEMENT
+
+
+        local y = 0
+        while y < hSprite do
+            local z = 0
+            while z < planes do
+                z = z + 1
+
+                local x = 0
+                while x < wSprite do
+                    x = x + 1
+
+                    local pixel = pixels[1 + x + y * wSprite]
+                end
+            end
+            y = y + 1
+        end
     end
 
     local binStr = table.concat(binWords, "")
@@ -663,8 +697,19 @@ local function readFile(importFilepath, aspectResponse)
                         k = k + 1
                         pixels[#pixels + 1] = pxRow[k]
                     end
-
                     y = y + 1
+                end
+
+                if isTrueColor24 then
+                    local k1 = 0
+                    while k1 < #pixels do
+                        k1 = k1 + 1
+                        local source = pixels[k1]
+                        local r = (source >> 0x00) & 0xff
+                        local g = (source >> 0x08) & 0xff
+                        local b = (source >> 0x10) & 0xff
+                        pixels[k1] = 0xff000000 | b << 0x10 | g << 0x08 | r
+                    end
                 end
             end
 
