@@ -110,7 +110,6 @@ local function writeFile(sprite, frObj, isPbm)
     local pxRatio = sprite.pixelRatio
 
     -- Unpack sprite spec.
-    -- Sprites need to be 320x200 or so in order to load...
     local wSprite = spriteSpec.width
     local hSprite = spriteSpec.height
     local alphaIndex = spriteSpec.transparentColor
@@ -150,33 +149,42 @@ local function writeFile(sprite, frObj, isPbm)
         lenPaletteActual = 256
     else
         -- Assume indexed color is the default.
-        -- 2 ^ 1 =   2
-        -- 2 ^ 2 =   4
-        -- 2 ^ 3 =   8
-        -- 2 ^ 4 =  16
-        -- 2 ^ 5 =  32
-        -- 2 ^ 6 =  64
-        -- 2 ^ 7 = 128
-        -- 2 ^ 8 = 256
+        -- 2 ^ 1 =   2, 2 ^ 5 =  32
+        -- 2 ^ 2 =   4, 2 ^ 6 =  64
+        -- 2 ^ 3 =   8, 2 ^ 7 = 128
+        -- 2 ^ 4 =  16, 2 ^ 8 = 256
         local palIdx = 1
         local frIdx = frObj.frameNumber
         local lenPalettes = #palettes
         if frIdx <= lenPalettes then palIdx = frIdx end
         palette = palettes[palIdx]
         lenPaletteActual = #palette
-        planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
+
+        if isPbm then
+            planes = 8
+        else
+            -- This might be causing problems with images being unable to load
+            -- in Irfanview.
+            planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
+        end
     end
 
     local formatHeader = "ILBM"
     if isPbm then formatHeader = "PBM " end
 
+    -- Do sprites need to be some proportion in order to load in Irfanview?
+    -- local wsnp2 = max(wSprite, 320)
+    -- local hsnp2 = max(hSprite, 200)
+    local wsnp2 = wSprite
+    local hsnp2 = hSprite
+
     local lenBodyData = 0
     if isPbm then
-        lenBodyData = wSprite * hSprite
+        lenBodyData = wsnp2 * hsnp2
     else
-        local wordsPerRow = ceil(wSprite / 16)
+        local wordsPerRow = ceil(wsnp2 / 16)
         local charsPerRow = wordsPerRow * 2
-        lenBodyData = hSprite * planes * charsPerRow
+        lenBodyData = hsnp2 * planes * charsPerRow
     end
 
     local lenCmapData = 0
@@ -184,7 +192,7 @@ local function writeFile(sprite, frObj, isPbm)
         lenCmapData = 3 * nextPowerOf2(min(256, lenPaletteActual))
     end
 
-    local formLength = 0 -- Form header
+    local formLength = 0 -- Form header (excluded)
         + 4              -- ILBM/PBM header
         + 8              -- BMHD header
         + 20             -- BMHD content
@@ -200,14 +208,14 @@ local function writeFile(sprite, frObj, isPbm)
         formatHeader,
         "BMHD",
         strpack(">I4", 20),                                           -- Chunk length. (5 words * 4)
-        strpack(">I2", wSprite),                                      -- 1. width
-        strpack(">I2", hSprite),                                      -- 1. height
+        strpack(">I2", wsnp2),                                        -- 1. width
+        strpack(">I2", hsnp2),                                        -- 1. height
         strpack(">I2", 0),                                            -- 2. xOrig
         strpack(">I2", 0),                                            -- 2. yOrig
         strpack(">I4", planes << 0x18),                               -- 3. planes, mask, compression
         strpack(">I4", alphaIndex << 10 | xAspect << 0x08 | yAspect), -- 4. alpha mask, px aspect ratio
-        strpack(">I2", wSprite),                                      -- 5. page width
-        strpack(">I2", hSprite),                                      -- 5. page height
+        strpack(">I2", wsnp2),                                        -- 5. page width
+        strpack(">I2", hsnp2),                                        -- 5. page height
     }
 
     if writeCmap then
@@ -227,11 +235,12 @@ local function writeFile(sprite, frObj, isPbm)
             i = i + 1
         end
 
+        local charZero = strchar(0)
         local expectedPalette = lenCmapData // 3
         while i < expectedPalette do
-            binWords[#binWords + 1] = strchar(0)
-            binWords[#binWords + 1] = strchar(0)
-            binWords[#binWords + 1] = strchar(0)
+            binWords[#binWords + 1] = charZero
+            binWords[#binWords + 1] = charZero
+            binWords[#binWords + 1] = charZero
             i = i + 1
         end
     end
@@ -239,7 +248,14 @@ local function writeFile(sprite, frObj, isPbm)
     binWords[#binWords + 1] = "BODY"
     binWords[#binWords + 1] = strpack(">I4", lenBodyData)
 
-    local flat = Image(spriteSpec)
+    local flatSpec = ImageSpec {
+        width = wsnp2,
+        height = hsnp2,
+        colorMode = colorMode,
+        transparentColor = alphaIndex
+    }
+    flatSpec.colorSpace = spriteSpec.colorSpace
+    local flat = Image(flatSpec)
     flat:drawSprite(sprite, 1)
     local pxItr = flat:pixels()
     if isPbm then
@@ -346,10 +362,6 @@ local function readFile(importFilepath, aspectResponse)
             print(strfmt("\nPBM found. Cursor: %d.", cursor))
             isPbm = true
             chunkLen = 4
-            -- elseif headerlc == "anim" then
-            --     print(strfmt("\nANIM found. Cursor: %d.", cursor))
-            --     isPbm = true
-            --     chunkLen = 4
         elseif headerlc == "bmhd" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
@@ -445,7 +457,6 @@ local function readFile(importFilepath, aspectResponse)
             if isHighRes then print("High res.") end
             if isHam then print("HAM.") end
             if isExtraHalf then print("Extra Half Bright") end
-            if isInterlaced then print("Interlaced.") end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "drng" then
@@ -546,6 +557,12 @@ local function readFile(importFilepath, aspectResponse)
             -- so this needs to wait until body to figure out...
             if wImage >= 640 then isHighRes = true end
             if hImage >= 400 then isInterlaced = true end
+
+            if isInterlaced and xAspect == 16 and yAspect == 11 then
+                -- Fudge the aspect for double-wide images.
+                xAspect = 1
+                yAspect = 1
+            end
 
             if isExtraHalf then
                 local i = 0
@@ -656,7 +673,7 @@ local function readFile(importFilepath, aspectResponse)
             -- Author.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("AUTH found. Cursor: %d\nlenLocal: %d",
+            print(strfmt("\nAUTH found. Cursor: %d\nlenLocal: %d",
                 cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
@@ -664,7 +681,7 @@ local function readFile(importFilepath, aspectResponse)
             -- Annotation.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("ANNO found. Cursor: %d\nlenLocal: %d",
+            print(strfmt("\nANNO found. Cursor: %d\nlenLocal: %d",
                 cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
@@ -672,7 +689,7 @@ local function readFile(importFilepath, aspectResponse)
             -- Divets per inch.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("DPI found. Cursor: %d\nlenLocal: %d",
+            print(strfmt("\nDPI found. Cursor: %d\nlenLocal: %d",
                 cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
@@ -680,7 +697,7 @@ local function readFile(importFilepath, aspectResponse)
             -- Don't know what this is, but it's found in the King Tut image.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("DPPS found. Cursor: %d\nlenLocal: %d",
+            print(strfmt("\nDPPS found. Cursor: %d\nlenLocal: %d",
                 cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
@@ -688,7 +705,7 @@ local function readFile(importFilepath, aspectResponse)
             -- Perspective and transformation.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("DDPV found. Cursor: %d\nlenLocal: %d",
+            print(strfmt("\nDDPV found. Cursor: %d\nlenLocal: %d",
                 cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
@@ -696,7 +713,7 @@ local function readFile(importFilepath, aspectResponse)
             -- Thumbnail.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("TINY found. Cursor: %d\nlenLocal: %d",
+            print(strfmt("\nTINY found. Cursor: %d\nlenLocal: %d",
                 cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
