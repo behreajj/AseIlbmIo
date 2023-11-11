@@ -411,6 +411,7 @@ local function readFile(importFilepath, aspectResponse)
     local strsub = string.sub
     local strunpack = string.unpack
     local strbyte = string.byte
+    local floor = math.floor
 
     local bodyFound = false
     local lenBinData = #binData
@@ -440,6 +441,7 @@ local function readFile(importFilepath, aspectResponse)
     local isHam = false
     local isTrueColor24 = false
     local isTrueColor32 = false
+    local sumDuration = 0.0
 
     ---@type {orig: integer, dest: integer, span: integer, isReverse: boolean}[]
     local colorCycles = {}
@@ -577,15 +579,6 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
-            -- typedef struct {
-            --     WORD  direction;    /* 0 = don't cycle.  1 = cycle forwards      */
-            --                         /* (1, 2, 3). -1 = cycle backwards (3, 2, 1) */
-            --     UBYTE start, end;   /* lower and upper color registers selected  */
-            --     LONG  seconds;      /* # seconds between changing colors plus... */
-            --     LONG  microseconds; /* # microseconds between changing colors    */
-            --     WORD  pad;          /* reserved for future use; store 0 here     */
-            --     } CycleInfo;
-
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("\nCCRT found. Cursor: %d.\nlenLocal: %d",
@@ -602,15 +595,29 @@ local function readFile(importFilepath, aspectResponse)
                 local orig = strunpack(">I1", origStr)
                 local dest = strunpack(">I1", destStr)
 
-                print(strfmt("orig: %d", orig))
-                print(strfmt("dest: %d", dest))
-
                 local span = 1 + dest - orig
                 if span > 1 then
+                    -- 1 sec = 1 000 milisec = 1 000 000 microsec
+                    local secsStr = strsub(binData, cursor + 12, cursor + 15)
+                    local microStr = strsub(binData, cursor + 16, cursor + 19)
+
+                    local seconds = strunpack(">I4", secsStr)
+                    local micros = strunpack(">I4", microStr)
+
+                    print(strfmt("orig: %d,\ndest: %d\nseconds: %d\nmicros: %d",
+                        orig, dest, seconds, micros))
+
+                    local duration = seconds + micros * 0.000001
+                    sumDuration = sumDuration + duration
+                    print(strfmt(
+                        "duration: %.6s, %dms",
+                        duration, floor(0.5 + duration * 1000.0)))
+
                     colorCycles[#colorCycles + 1] = {
                         orig = orig,
                         dest = dest,
                         span = span,
+                        duration = duration,
                         isReverse = dir < 0
                     }
                 end
@@ -639,26 +646,27 @@ local function readFile(importFilepath, aspectResponse)
                 local orig = strunpack(">I1", origStr)
                 local dest = strunpack(">I1", destStr)
 
-                print(strfmt("orig: %d", orig))
-                print(strfmt("dest: %d", dest))
+                print(strfmt("orig: %d,\ndest: %d", orig, dest))
 
                 local span = 1 + dest - orig
                 if span > 1 then
-                    -- "The field rate determines the speed at which the colors
-                    -- will step when color cycling is on. The units are such
-                    -- that a rate of 60 steps per second is represented as
-                    -- 2^14 = 16384. Slower rates can be obtained by linear
-                    -- scaling: for 30 steps/second, rate = 8192; for 1
-                    -- step/second, rate = 16384/60 ~273."
                     local rateStr = strsub(binData, cursor + 10, cursor + 11)
                     local rate = strunpack(">I2", rateStr)
-                    print(strfmt("rate: %d", rate))
+                    local duration = 273.06666666667 / rate
+                    sumDuration = sumDuration + duration
+
+                    print(strfmt(
+                        "rate: %d, duration: %.6s, %dms",
+                        rate, duration, floor(0.5 + duration * 1000.0)))
 
                     if rate > 0 then
+                        -- 16384 = 60 fps
+                        -- duration in seconds: 16384 / (rate * 60)
                         colorCycles[#colorCycles + 1] = {
                             orig = orig,
                             dest = dest,
                             span = span,
+                            duration = duration,
                             isReverse = ((flags >> 1) & 1) ~= 0
                         }
                     end
@@ -934,7 +942,7 @@ local function readFile(importFilepath, aspectResponse)
     print(strfmt("\nlenColorCycles: %d", lenColorCycles))
     if lenColorCycles > 0 then
         -- TODO: Do color cycling indices work differently for extra half brite?
-
+        local avgDuration = sumDuration / lenColorCycles
         local activeLayer = sprite.layers[1]
 
         -- Create a dictionary where a palette index, the key, is assigned an
@@ -974,8 +982,10 @@ local function readFile(importFilepath, aspectResponse)
                 while g < requiredFrames do
                     g = g + 1
                     local frObj = sprite:newEmptyFrame()
+                    frObj.duration = avgDuration
                     sprite:newCel(activeLayer, frObj, stillImage)
                 end
+                sprite.frames[1].duration = avgDuration
             end)
 
             local h = 0
