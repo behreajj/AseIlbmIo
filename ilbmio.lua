@@ -141,6 +141,8 @@ local function writeFile(sprite, frObj, isPbm)
 
     local isTrueColor24 = false
     local isTrueColor32 = false
+    local writeCmap = true
+
     if spriteSpec.colorMode == ColorMode.INDEXED then
         local palIdx = 1
         local frIdx = frObj.frameNumber
@@ -181,15 +183,15 @@ local function writeFile(sprite, frObj, isPbm)
             end
         end
     else
+        local palIdx = 1
+        local frIdx = frObj.frameNumber
+        local lenPalettes = #palettes
+        if frIdx <= lenPalettes then palIdx = frIdx end
+        palette = palettes[palIdx]
+        lenPaletteActual = #palette
+
         -- RGB color mode.
         if isPbm then
-            local palIdx = 1
-            local frIdx = frObj.frameNumber
-            local lenPalettes = #palettes
-            if frIdx <= lenPalettes then palIdx = frIdx end
-            palette = palettes[palIdx]
-            lenPaletteActual = #palette
-
             flat:drawSprite(sprite, frObj)
             local pxItr = flat:pixels()
             for pixel in pxItr do
@@ -206,6 +208,7 @@ local function writeFile(sprite, frObj, isPbm)
                 end
             end
         else
+            writeCmap = false
             if sprite.backgroundLayer ~= nil then
                 isTrueColor24 = true
                 planes = 24
@@ -214,34 +217,13 @@ local function writeFile(sprite, frObj, isPbm)
                 planes = 32
             end
 
-            flat:drawSprite(sprite, frObj)
-            local pxItr = flat:pixels()
-
-            ---@type integer<integer, Color>
-            local uniques = {}
-            local uniquesCount = 0
             local mask = isTrueColor24 and 0x00ffffff or 0xffffffff
 
+            flat:drawSprite(sprite, frObj)
+            local pxItr = flat:pixels()
             for pixel in pxItr do
                 local abgr32 = pixel()
                 pixels[#pixels + 1] = mask & abgr32
-
-                local opaque = 0xff000000 | abgr32
-                if not uniques[opaque] then
-                    uniquesCount = uniquesCount + 1
-                    local r8 = abgr32 & 0xff
-                    local g8 = (abgr32 >> 0x08) & 0xff
-                    local b8 = (abgr32 >> 0x10) & 0xff
-                    uniques[opaque] = Color { r = r8, g = g8, b = b8, a = 255 }
-                end
-            end
-
-            lenPaletteActual = uniquesCount
-            palette = Palette(lenPaletteActual)
-            local j = 0
-            for _, aseColor in pairs(uniques) do
-                palette:setColor(j, aseColor)
-                j = j + 1
             end
         end
     end
@@ -253,15 +235,18 @@ local function writeFile(sprite, frObj, isPbm)
     local lenBodyData = isPbm
         and wSprite * hSprite
         or hSprite * planes * charsPerRow
-    local lenCmapData = 3 * nextPowerOf2(min(256, lenPaletteActual))
+    local lenCmapData = writeCmap
+        and 3 * nextPowerOf2(min(256, lenPaletteActual))
+        or 0
     local formLength = 0 -- Form header is excluded.
         + 4              -- ILBM / PBM header (no length).
         + 8              -- BMHD header
         + 20             -- BMHD content
-        + 8              -- CMAP header
-        + lenCmapData    -- CMAP content
         + 8              -- Body header
         + lenBodyData    -- Body content
+    if writeCmap then
+        formLength = formLength + 8 + lenCmapData
+    end
 
     ---@type string[]
     local binData = {
@@ -280,30 +265,33 @@ local function writeFile(sprite, frObj, isPbm)
         strpack(">I1", yAspect),        -- 4. aspect ratio y
         strpack(">I2", wSprite),        -- 5. page width
         strpack(">I2", hSprite),        -- 5. page height
-        "CMAP",
-        strpack(">I4", lenCmapData)
     }
 
-    local i = 0
-    local lenPaletteClamped = min(256, lenPaletteActual)
-    while i < lenPaletteClamped do
-        local aseColor = palette:getColor(i)
-        local rChar = strchar(aseColor.red)
-        local gChar = strchar(aseColor.green)
-        local bChar = strchar(aseColor.blue)
-        binData[#binData + 1] = rChar
-        binData[#binData + 1] = gChar
-        binData[#binData + 1] = bChar
-        i = i + 1
-    end
+    if writeCmap then
+        binData[#binData + 1] = "CMAP"
+        binData[#binData + 1] = strpack(">I4", lenCmapData)
 
-    local charZero = strchar(0)
-    local expectedPalette = lenCmapData // 3
-    while i < expectedPalette do
-        binData[#binData + 1] = charZero
-        binData[#binData + 1] = charZero
-        binData[#binData + 1] = charZero
-        i = i + 1
+        local i = 0
+        local lenPaletteClamped = min(256, lenPaletteActual)
+        while i < lenPaletteClamped do
+            local aseColor = palette:getColor(i)
+            local rChar = strchar(aseColor.red)
+            local gChar = strchar(aseColor.green)
+            local bChar = strchar(aseColor.blue)
+            binData[#binData + 1] = rChar
+            binData[#binData + 1] = gChar
+            binData[#binData + 1] = bChar
+            i = i + 1
+        end
+
+        local charZero = strchar(0)
+        local expectedPalette = lenCmapData // 3
+        while i < expectedPalette do
+            binData[#binData + 1] = charZero
+            binData[#binData + 1] = charZero
+            binData[#binData + 1] = charZero
+            i = i + 1
+        end
     end
 
     binData[#binData + 1] = "BODY"
@@ -459,7 +447,7 @@ local function readFile(importFilepath, aspectResponse)
         if headerlc == "form" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             lenForm = strunpack(">I4", lenStr)
-            print(strfmt("\nFORM found. Cursor: %d.\nlenInt: %d",
+            print(strfmt("\nFORM found. Cursor: %d.\nlenForm: %d",
                 cursor, lenForm))
             chunkLen = 8
         elseif headerlc == "ilbm" then
@@ -597,7 +585,7 @@ local function readFile(importFilepath, aspectResponse)
 
                 local span = 1 + dest - orig
                 if span > 1 then
-                    -- 1 sec = 1 000 milisec = 1 000 000 microsec
+                    -- 1 sec = 1000 milisec = 1000000 microsec.
                     local secsStr = strsub(binData, cursor + 12, cursor + 15)
                     local microStr = strsub(binData, cursor + 16, cursor + 19)
 
@@ -672,6 +660,27 @@ local function readFile(importFilepath, aspectResponse)
                     end
                 end
             end
+
+            chunkLen = 8 + lenLocal
+        elseif headerlc == "xbmi" then
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("\nXBMI found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
+            -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.XBMI
+            -- 0 PALETTE
+            -- 1 GRAY black = 0, white = (1 << depth) - 1
+            -- 2 RGB bits per sample = depth / 3, samples per pixel = 3.
+            -- 3 RGBA bits per sample = depth / 4, samples per pixel = 4.
+            -- 4 CMYK
+            -- 5 CMYKA
+            -- 6 Black or white
+            local clrFmtStr = strsub(binData, cursor + 8, cursor + 9)
+            local clrFmtFlag = strunpack(">I2", clrFmtStr)
+            if clrFmtFlag == 2 then isTrueColor24 = true end
+            if clrFmtFlag == 3 then isTrueColor32 = true end
+            print(strfmt("clrFmt: %d, 0x%04x", clrFmtFlag, clrFmtFlag))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "body" then
