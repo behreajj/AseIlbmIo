@@ -10,8 +10,6 @@ local defaults = {
     aspectResponse = "SPRITE_RATIO",
     maxAspect = 16,
     maxFrames = 512,
-    wMax = 640,
-    hMax = 640,
 }
 
 ---@param bytes integer[]
@@ -102,6 +100,7 @@ local function writeFile(sprite, frObj, isPbm)
     local strchar = string.char
     local abs = math.abs
     local ceil = math.ceil
+    local log = math.log
     local max = math.max
     local min = math.min
 
@@ -111,8 +110,8 @@ local function writeFile(sprite, frObj, isPbm)
     local pxRatio = sprite.pixelRatio
 
     -- Unpack sprite spec.
-    local wSprite = min(defaults.wMax, spriteSpec.width)
-    local hSprite = min(defaults.hMax, spriteSpec.height)
+    local wSprite = spriteSpec.width
+    local hSprite = spriteSpec.height
     local alphaIndex = spriteSpec.transparentColor
 
     -- Unpack sprite pixel aspect.
@@ -142,6 +141,8 @@ local function writeFile(sprite, frObj, isPbm)
     flatSpec.colorSpace = spriteSpec.colorSpace
     local flat = Image(flatSpec)
 
+    local isTrueColor24 = false
+    local isTrueColor32 = false
     if spriteSpec.colorMode == ColorMode.INDEXED then
         local palIdx = 1
         local frIdx = frObj.frameNumber
@@ -157,52 +158,57 @@ local function writeFile(sprite, frObj, isPbm)
             pixels[lenPixels] = pixel()
         end
 
-        -- This might be causing problems with images being unable to load
-        -- in Irfanview.
-        -- planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
+        if not isPbm then
+            planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
+        end
     else
-        local dupe = Sprite(sprite)
-        app.activeSprite = dupe
-
-        app.command.CanvasSize {
-            ui = false,
-            left = 0,
-            top = 0,
-            right = defaults.wMax,
-            bottom = defaults.hMax,
-            trimOutside = true
-        }
-        app.command.FlattenLayers { visibleOnly = true }
-        app.command.BackgroundFromLayer()
-        app.command.ColorQuantization {
-            ui = false,
-            maxColors = 256,
-            withAlpha = false
-        }
-        app.command.ChangePixelFormat {
-            ui = false,
-            format = "indexed",
-            dithering = "ordered"
-        }
-
-        local dupePalette = dupe.palettes[1]
-        lenPaletteActual = #dupePalette
-        palette = Palette(lenPaletteActual)
-        local i = 0
-        while i < lenPaletteActual do
-            palette:setColor(i, dupePalette:getColor(i))
-            i = i + 1
+        if sprite.backgroundLayer ~= nil then
+            isTrueColor24 = true
+            planes = 24
+        else
+            isTrueColor32 = true
+            planes = 32
         end
 
-        flat:drawSprite(dupe, 1)
+        flat:drawSprite(sprite, 1)
         local pxItr = flat:pixels()
+
+        ---@type integer<integer, Color>
+        local uniques = {}
+        local uniquesCount = 0
+
+        local stride = isTrueColor32 and 4 or 3
+
         for pixel in pxItr do
-            lenPixels = lenPixels + 1
-            pixels[lenPixels] = pixel()
+            local hex32 = pixel()
+            local r8 = hex32 & 0xff
+            local g8 = (hex32 >> 0x08) & 0xff
+            local b8 = (hex32 >> 0x10) & 0xff
+
+            pixels[1 + lenPixels] = r8
+            pixels[2 + lenPixels] = g8
+            pixels[3 + lenPixels] = b8
+
+            if isTrueColor32 then
+                local a8 = (hex32 >> 0x18) & 0xff
+                pixels[4 + lenPixels] = a8
+            end
+
+            local opaque = 0xff000000 | hex32
+            if not uniques[opaque] then
+                uniquesCount = uniquesCount + 1
+                uniques[opaque] = Color { r = r8, g = g8, b = b8, a = 255 }
+            end
+            lenPixels = lenPixels + stride
         end
 
-        dupe:close()
-        app.activeSprite = sprite
+        lenPaletteActual = uniquesCount
+        palette = Palette(lenPaletteActual)
+        local j = 0
+        for _, aseColor in pairs(uniques) do
+            palette:setColor(j, aseColor)
+            j = j + 1
+        end
     end
 
     -- Do sprites need to be some proportion in order to load in Irfanview?
@@ -228,25 +234,27 @@ local function writeFile(sprite, frObj, isPbm)
     formLength = formLength + 8 + lenBodyData
 
     ---@type string[]
-    local binWords = {
+    local binData = {
         "FORM",
         strpack(">I4", formLength),
         formatHeader,
         "BMHD",
-        strpack(">I4", 20),                                           -- Chunk length. (5 words * 4)
-        strpack(">I2", wSprite),                                      -- 1. width
-        strpack(">I2", hSprite),                                      -- 1. height
-        strpack(">I2", 0),                                            -- 2. xOrig
-        strpack(">I2", 0),                                            -- 2. yOrig
-        strpack(">I4", planes << 0x18),                               -- 3. planes, mask, compression
-        strpack(">I4", alphaIndex << 10 | xAspect << 0x08 | yAspect), -- 4. alpha mask, px aspect ratio
-        strpack(">I2", wSprite),                                      -- 5. page width
-        strpack(">I2", hSprite),                                      -- 5. page height
+        strpack(">I4", 20),             -- Chunk length. (5 words * 4)
+        strpack(">I2", wSprite),        -- 1. width
+        strpack(">I2", hSprite),        -- 1. height
+        strpack(">I2", 0),              -- 2. xOrig
+        strpack(">I2", 0),              -- 2. yOrig
+        strpack(">I4", planes << 0x18), -- 3. planes, mask, compression
+        strpack(">I2", alphaIndex),     -- 4. alpha mask
+        strpack(">I1", xAspect),        -- 4. aspect ratio x
+        strpack(">I1", yAspect),        -- 4.aspect ratio y
+        strpack(">I2", wSprite),        -- 5. page width
+        strpack(">I2", hSprite),        -- 5. page height
     }
 
     if writeCmap then
-        binWords[#binWords + 1] = "CMAP"
-        binWords[#binWords + 1] = strpack(">I4", lenCmapData)
+        binData[#binData + 1] = "CMAP"
+        binData[#binData + 1] = strpack(">I4", lenCmapData)
 
         local i = 0
         local lenPaletteClamped = min(256, lenPaletteActual)
@@ -255,53 +263,87 @@ local function writeFile(sprite, frObj, isPbm)
             local rChar = strchar(aseColor.red)
             local gChar = strchar(aseColor.green)
             local bChar = strchar(aseColor.blue)
-            binWords[#binWords + 1] = rChar
-            binWords[#binWords + 1] = gChar
-            binWords[#binWords + 1] = bChar
+            binData[#binData + 1] = rChar
+            binData[#binData + 1] = gChar
+            binData[#binData + 1] = bChar
             i = i + 1
         end
 
         local charZero = strchar(0)
         local expectedPalette = lenCmapData // 3
         while i < expectedPalette do
-            binWords[#binWords + 1] = charZero
-            binWords[#binWords + 1] = charZero
-            binWords[#binWords + 1] = charZero
+            binData[#binData + 1] = charZero
+            binData[#binData + 1] = charZero
+            binData[#binData + 1] = charZero
             i = i + 1
         end
     end
 
-    binWords[#binWords + 1] = "BODY"
-    binWords[#binWords + 1] = strpack(">I4", lenBodyData)
+    binData[#binData + 1] = "BODY"
+    binData[#binData + 1] = strpack(">I4", lenBodyData)
 
     if isPbm then
         local j = 0
         while j < lenPixels do
             j = j + 1
-            binWords[#binWords + 1] = strchar(pixels[j])
+            binData[#binData + 1] = strchar(pixels[j])
         end
     else
-        -- TODO: IMPLEMENT
+        local bytesPerRow = ceil(wSprite / 16) * 2
 
-
+        -- TODO: Rewrite all this.
         local y = 0
         while y < hSprite do
-            local z = 0
-            while z < planes do
-                z = z + 1
+            -- Init 2D array to zero.
+            ---@type integer[][]
+            local row = {}
+            local z0 = 0
+            while z0 < planes do
+                ---@type integer[]
+                local col = {}
+                local w0 = 0
+                while w0 < bytesPerRow do
+                    w0 = w0 + 1
+                    col[w0] = 0
+                end
+                z0 = z0 + 1
+                row[z0] = col
+            end
 
-                local x = 0
-                while x < wSprite do
-                    x = x + 1
+            local x = 0
+            while x < wSprite do
+                local pixel = pixels[1 + x + y * wSprite]
 
-                    local pixel = pixels[1 + x + y * wSprite]
+                local z1 = 0
+                while z1 < planes do
+                    if pixel & (1 << z1) ~= 0 then
+                        local xshr3 = x >> 3
+                        local char = row[1 + z1][1 + xshr3]
+                        row[1 + z1][1 + xshr3] = char | 0x80 >> (x & 7)
+                    end
+                    z1 = z1 + 1
+                end
+
+                x = x + 1
+            end
+
+            -- Write to binary.
+            local z2 = 0
+            while z2 < planes do
+                z2 = z2 + 1
+                local col = row[z2]
+                local w2 = 0
+                while w2 < bytesPerRow do
+                    w2 = w2 + 1
+                    binData[#binData + 1] = strchar(col[w2])
                 end
             end
+
             y = y + 1
         end
     end
 
-    local binStr = table.concat(binWords, "")
+    local binStr = table.concat(binData, "")
     return binStr
 end
 
@@ -654,8 +696,9 @@ local function readFile(importFilepath, aspectResponse)
                 end
 
                 local wordsPerRow = math.ceil(wImage / 16)
+                local filler = isTrueColor24 and 0xff000000 or 0
 
-                -- TODO: Can all this be flattened?
+                -- TODO: This needs to be rewritten, flattened if possible.
                 local y = 0
                 while y < hImage do
                     ---@type integer[]
@@ -695,21 +738,9 @@ local function readFile(importFilepath, aspectResponse)
                     local k = 0
                     while k < lenPxRow do
                         k = k + 1
-                        pixels[#pixels + 1] = pxRow[k]
+                        pixels[#pixels + 1] = filler | pxRow[k]
                     end
                     y = y + 1
-                end
-
-                if isTrueColor24 then
-                    local k1 = 0
-                    while k1 < #pixels do
-                        k1 = k1 + 1
-                        local source = pixels[k1]
-                        local r = (source >> 0x00) & 0xff
-                        local g = (source >> 0x08) & 0xff
-                        local b = (source >> 0x10) & 0xff
-                        pixels[k1] = 0xff000000 | b << 0x10 | g << 0x08 | r
-                    end
                 end
             end
 
