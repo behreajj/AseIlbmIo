@@ -6,46 +6,10 @@ local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
     -- To test anim files: https://aminet.net/pix/anim
-    -- https://www.wikiwand.com/en/LHA_(file_format)
     aspectResponse = "SPRITE_RATIO",
     maxAspect = 16,
     maxFrames = 512,
 }
-
----@param bytes integer[]
----@return integer[]
-local function decompress(bytes)
-    ---@type integer[]
-    local decompressed = {}
-    local lenBytes = #bytes
-    local j = 0
-    while j < lenBytes do
-        local byte = bytes[1 + j]
-        local readStep = 1
-
-        -- The algorithm is adjusted for unsigned bytes, not signed.
-        if byte > 128 then
-            local next = bytes[2 + j]
-            readStep = 2
-            local k = 0
-            while k < (257 - byte) do
-                decompressed[#decompressed + 1] = next
-                k = k + 1
-            end
-        elseif byte < 128 then
-            local k = 0
-            while k < (byte + 1) do
-                decompressed[#decompressed + 1] = bytes[2 + j + k]
-                k = k + 1
-                readStep = readStep + 1
-            end
-        end
-
-        j = j + readStep
-    end
-
-    return decompressed
-end
 
 ---@param a integer
 ---@param b integer
@@ -90,6 +54,41 @@ local function nextPowerOf2(x)
     return 0
 end
 
+---@param bytes integer[]
+---@return integer[]
+local function decompress(bytes)
+    ---@type integer[]
+    local decompressed = {}
+    local lenBytes = #bytes
+    local j = 0
+    while j < lenBytes do
+        local byte = bytes[1 + j]
+        local readStep = 1
+
+        -- The algorithm is adjusted for unsigned bytes, not signed.
+        if byte > 128 then
+            local next = bytes[2 + j]
+            readStep = 2
+            local k = 0
+            while k < (257 - byte) do
+                decompressed[#decompressed + 1] = next
+                k = k + 1
+            end
+        elseif byte < 128 then
+            local k = 0
+            while k < (byte + 1) do
+                decompressed[#decompressed + 1] = bytes[2 + j + k]
+                k = k + 1
+                readStep = readStep + 1
+            end
+        end
+
+        j = j + readStep
+    end
+
+    return decompressed
+end
+
 ---@param sprite Sprite
 ---@param frObj Frame
 ---@param isPbm boolean
@@ -113,6 +112,7 @@ local function writeFile(sprite, frObj, isPbm)
     local wSprite = spriteSpec.width
     local hSprite = spriteSpec.height
     local alphaIndex = spriteSpec.transparentColor
+    local colorMode = spriteSpec.colorMode
 
     -- Unpack sprite pixel aspect.
     local xAspect = max(1, abs(pxRatio.w))
@@ -128,14 +128,12 @@ local function writeFile(sprite, frObj, isPbm)
     ---@type integer[]
     local pixels = {}
     local palette = nil
-    local lenPixels = 0
-    local writeCmap = true
     local lenPaletteActual = 0
 
     local flatSpec = ImageSpec {
         width = wSprite,
         height = hSprite,
-        colorMode = ColorMode.INDEXED,
+        colorMode = colorMode,
         transparentColor = alphaIndex
     }
     flatSpec.colorSpace = spriteSpec.colorSpace
@@ -151,63 +149,96 @@ local function writeFile(sprite, frObj, isPbm)
         palette = palettes[palIdx]
         lenPaletteActual = #palette
 
-        flat:drawSprite(sprite, 1)
+        flat:drawSprite(sprite, frObj)
         local pxItr = flat:pixels()
         for pixel in pxItr do
-            lenPixels = lenPixels + 1
-            pixels[lenPixels] = pixel()
+            pixels[#pixels + 1] = pixel()
         end
 
         if not isPbm then
             planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
         end
-    else
-        if sprite.backgroundLayer ~= nil then
-            isTrueColor24 = true
-            planes = 24
-        else
-            isTrueColor32 = true
-            planes = 32
+    elseif colorMode == ColorMode.GRAY then
+        -- TODO: Support alpha for true color 32?
+        lenPaletteActual = 256
+        palette = Palette(256)
+        local i = 0
+        while i < 256 do
+            palette:setColor(i, Color { r = i, g = i, b = i, a = 255 })
+            i = i + 1
         end
 
-        flat:drawSprite(sprite, 1)
+        flat:drawSprite(sprite, frObj)
         local pxItr = flat:pixels()
-
-        ---@type integer<integer, Color>
-        local uniques = {}
-        local uniquesCount = 0
-
-        local stride = isTrueColor32 and 4 or 3
-
         for pixel in pxItr do
-            local hex32 = pixel()
-            local r8 = hex32 & 0xff
-            local g8 = (hex32 >> 0x08) & 0xff
-            local b8 = (hex32 >> 0x10) & 0xff
-
-            pixels[1 + lenPixels] = r8
-            pixels[2 + lenPixels] = g8
-            pixels[3 + lenPixels] = b8
-
-            if isTrueColor32 then
-                local a8 = (hex32 >> 0x18) & 0xff
-                pixels[4 + lenPixels] = a8
+            local av16 = pixel()
+            local a8 = (av16 >> 0x08) & 0xff
+            if a8 <= 0 then
+                pixels[#pixels + 1] = alphaIndex
+            else
+                local v8 = av16 & 0xff
+                pixels[#pixels + 1] = v8
             end
-
-            local opaque = 0xff000000 | hex32
-            if not uniques[opaque] then
-                uniquesCount = uniquesCount + 1
-                uniques[opaque] = Color { r = r8, g = g8, b = b8, a = 255 }
-            end
-            lenPixels = lenPixels + stride
         end
+    else
+        -- RGB color mode.
+        if isPbm then
+            palette = palettes[1]
+            lenPaletteActual = #palette
 
-        lenPaletteActual = uniquesCount
-        palette = Palette(lenPaletteActual)
-        local j = 0
-        for _, aseColor in pairs(uniques) do
-            palette:setColor(j, aseColor)
-            j = j + 1
+            flat:drawSprite(sprite, frObj)
+            local pxItr = flat:pixels()
+            for pixel in pxItr do
+                local abgr32 = pixel()
+                local a8 = (abgr32 >> 0x18) & 0xff
+                if a8 <= 0 then
+                    pixels[#pixels + 1] = alphaIndex
+                else
+                    local r8 = abgr32 & 0xff
+                    local g8 = (abgr32 >> 0x08) & 0xff
+                    local b8 = (abgr32 >> 0x10) & 0xff
+                    local aseColor = Color { r = r8, g = g8, b = b8, a = 255 }
+                    pixels[#pixels + 1] = aseColor.index
+                end
+            end
+        else
+            if sprite.backgroundLayer ~= nil then
+                isTrueColor24 = true
+                planes = 24
+            else
+                isTrueColor32 = true
+                planes = 32
+            end
+
+            flat:drawSprite(sprite, frObj)
+            local pxItr = flat:pixels()
+
+            ---@type integer<integer, Color>
+            local uniques = {}
+            local uniquesCount = 0
+            local mask = isTrueColor24 and 0x00ffffff or 0xffffffff
+
+            for pixel in pxItr do
+                local abgr32 = pixel()
+                pixels[#pixels + 1] = abgr32 & mask
+
+                local opaque = 0xff000000 | abgr32
+                if not uniques[opaque] then
+                    uniquesCount = uniquesCount + 1
+                    local r8 = abgr32 & 0xff
+                    local g8 = (abgr32 >> 0x08) & 0xff
+                    local b8 = (abgr32 >> 0x10) & 0xff
+                    uniques[opaque] = Color { r = r8, g = g8, b = b8, a = 255 }
+                end
+            end
+
+            lenPaletteActual = uniquesCount
+            palette = Palette(lenPaletteActual)
+            local j = 0
+            for _, aseColor in pairs(uniques) do
+                palette:setColor(j, aseColor)
+                j = j + 1
+            end
         end
     end
 
@@ -219,19 +250,16 @@ local function writeFile(sprite, frObj, isPbm)
         and wSprite * hSprite
         or hSprite * planes * charsPerRow
 
-    local lenCmapData = 0
-    if writeCmap then
-        lenCmapData = 3 * nextPowerOf2(min(256, lenPaletteActual))
-    end
+    local lenCmapData = 3 * nextPowerOf2(min(256, lenPaletteActual))
 
-    local formLength = 0 -- Form header (excluded)
-        + 4              -- ILBM / PBM header
+    local formLength = 0 -- Form header is excluded.
+        + 4              -- ILBM / PBM header (no length).
         + 8              -- BMHD header
         + 20             -- BMHD content
-    if writeCmap then
-        formLength = formLength + 8 + lenCmapData
-    end
-    formLength = formLength + 8 + lenBodyData
+        + 8              -- CMAP header
+        + lenCmapData    -- CMAP content
+        + 8              -- Body header
+        + lenBodyData    -- Body content
 
     ---@type string[]
     local binData = {
@@ -252,31 +280,29 @@ local function writeFile(sprite, frObj, isPbm)
         strpack(">I2", hSprite),        -- 5. page height
     }
 
-    if writeCmap then
-        binData[#binData + 1] = "CMAP"
-        binData[#binData + 1] = strpack(">I4", lenCmapData)
+    binData[#binData + 1] = "CMAP"
+    binData[#binData + 1] = strpack(">I4", lenCmapData)
 
-        local i = 0
-        local lenPaletteClamped = min(256, lenPaletteActual)
-        while i < lenPaletteClamped do
-            local aseColor = palette:getColor(i)
-            local rChar = strchar(aseColor.red)
-            local gChar = strchar(aseColor.green)
-            local bChar = strchar(aseColor.blue)
-            binData[#binData + 1] = rChar
-            binData[#binData + 1] = gChar
-            binData[#binData + 1] = bChar
-            i = i + 1
-        end
+    local i = 0
+    local lenPaletteClamped = min(256, lenPaletteActual)
+    while i < lenPaletteClamped do
+        local aseColor = palette:getColor(i)
+        local rChar = strchar(aseColor.red)
+        local gChar = strchar(aseColor.green)
+        local bChar = strchar(aseColor.blue)
+        binData[#binData + 1] = rChar
+        binData[#binData + 1] = gChar
+        binData[#binData + 1] = bChar
+        i = i + 1
+    end
 
-        local charZero = strchar(0)
-        local expectedPalette = lenCmapData // 3
-        while i < expectedPalette do
-            binData[#binData + 1] = charZero
-            binData[#binData + 1] = charZero
-            binData[#binData + 1] = charZero
-            i = i + 1
-        end
+    local charZero = strchar(0)
+    local expectedPalette = lenCmapData // 3
+    while i < expectedPalette do
+        binData[#binData + 1] = charZero
+        binData[#binData + 1] = charZero
+        binData[#binData + 1] = charZero
+        i = i + 1
     end
 
     binData[#binData + 1] = "BODY"
@@ -284,6 +310,7 @@ local function writeFile(sprite, frObj, isPbm)
 
     if isPbm then
         local j = 0
+        local lenPixels = #pixels
         while j < lenPixels do
             j = j + 1
             binData[#binData + 1] = strchar(pixels[j])
