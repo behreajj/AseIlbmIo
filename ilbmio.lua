@@ -423,6 +423,7 @@ local function readFile(importFilepath, aspectResponse)
     local hSprite = 1
 
     local isPbm = false
+    local isAnim = false
     local isExtraHalf = false
     local isHighRes = false
     local isInterlaced = false
@@ -456,6 +457,10 @@ local function readFile(importFilepath, aspectResponse)
         elseif headerlc == "pbm " then
             print(strfmt("\nPBM found. Cursor: %d.", cursor))
             isPbm = true
+            chunkLen = 4
+        elseif headerlc == "anim" then
+            isAnim = true
+            print(strfmt("\nANIM found. Cursor: %d.", cursor))
             chunkLen = 4
         elseif headerlc == "bmhd" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
@@ -534,7 +539,6 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "camg" then
-            -- Hires must impact aspect ratio, e.g., 20x11 should be 10x11?
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("\nCAMG found. Cursor: %d.\nlenLocal: %d",
@@ -542,7 +546,7 @@ local function readFile(importFilepath, aspectResponse)
 
             local flagsStr = strsub(binData, cursor + 8, cursor + 11)
             local flags = strunpack(">I4", flagsStr)
-            print(strfmt("flags: %d 0x%04x", flags, flags))
+            print(strfmt("flags: %d, 0x%04x", flags, flags))
 
             isHighRes = (flags & 0x8000) ~= 0
             isHam = (flags & 0x800) ~= 0
@@ -552,6 +556,7 @@ local function readFile(importFilepath, aspectResponse)
             if isHighRes then print("High res.") end
             if isHam then print("HAM.") end
             if isExtraHalf then print("Extra Half Bright") end
+            if isInterlaced then print("Interlaced") end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "drng" then
@@ -591,23 +596,24 @@ local function readFile(importFilepath, aspectResponse)
 
                     local seconds = strunpack(">I4", secsStr)
                     local micros = strunpack(">I4", microStr)
+                    if seconds > 0 or micros > 0 then
+                        print(strfmt("orig: %d,\ndest: %d\nseconds: %d\nmicros: %d",
+                            orig, dest, seconds, micros))
 
-                    print(strfmt("orig: %d,\ndest: %d\nseconds: %d\nmicros: %d",
-                        orig, dest, seconds, micros))
+                        local duration = seconds + micros * 0.000001
+                        sumDuration = sumDuration + duration
+                        print(strfmt(
+                            "duration: %.6s, %dms",
+                            duration, floor(0.5 + duration * 1000.0)))
 
-                    local duration = seconds + micros * 0.000001
-                    sumDuration = sumDuration + duration
-                    print(strfmt(
-                        "duration: %.6s, %dms",
-                        duration, floor(0.5 + duration * 1000.0)))
-
-                    colorCycles[#colorCycles + 1] = {
-                        orig = orig,
-                        dest = dest,
-                        span = span,
-                        duration = duration,
-                        isReverse = dir < 0
-                    }
+                        colorCycles[#colorCycles + 1] = {
+                            orig = orig,
+                            dest = dest,
+                            span = span,
+                            duration = duration,
+                            isReverse = dir < 0
+                        }
+                    end
                 end
             end
 
@@ -640,16 +646,16 @@ local function readFile(importFilepath, aspectResponse)
                 if span > 1 then
                     local rateStr = strsub(binData, cursor + 10, cursor + 11)
                     local rate = strunpack(">I2", rateStr)
-                    local duration = 273.06666666667 / rate
-                    sumDuration = sumDuration + duration
-
-                    print(strfmt(
-                        "rate: %d, duration: %.6s, %dms",
-                        rate, duration, floor(0.5 + duration * 1000.0)))
-
                     if rate > 0 then
                         -- 16384 = 60 fps
                         -- duration in seconds: 16384 / (rate * 60)
+                        local duration = 273.06666666667 / rate
+                        sumDuration = sumDuration + duration
+
+                        print(strfmt(
+                            "rate: %d, duration: %.6s, %dms",
+                            rate, duration, floor(0.5 + duration * 1000.0)))
+
                         colorCycles[#colorCycles + 1] = {
                             orig = orig,
                             dest = dest,
