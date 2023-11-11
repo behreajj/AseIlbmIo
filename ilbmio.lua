@@ -183,7 +183,11 @@ local function writeFile(sprite, frObj, isPbm)
     else
         -- RGB color mode.
         if isPbm then
-            palette = palettes[1]
+            local palIdx = 1
+            local frIdx = frObj.frameNumber
+            local lenPalettes = #palettes
+            if frIdx <= lenPalettes then palIdx = frIdx end
+            palette = palettes[palIdx]
             lenPaletteActual = #palette
 
             flat:drawSprite(sprite, frObj)
@@ -220,7 +224,7 @@ local function writeFile(sprite, frObj, isPbm)
 
             for pixel in pxItr do
                 local abgr32 = pixel()
-                pixels[#pixels + 1] = abgr32 & mask
+                pixels[#pixels + 1] = mask & abgr32
 
                 local opaque = 0xff000000 | abgr32
                 if not uniques[opaque] then
@@ -249,9 +253,7 @@ local function writeFile(sprite, frObj, isPbm)
     local lenBodyData = isPbm
         and wSprite * hSprite
         or hSprite * planes * charsPerRow
-
     local lenCmapData = 3 * nextPowerOf2(min(256, lenPaletteActual))
-
     local formLength = 0 -- Form header is excluded.
         + 4              -- ILBM / PBM header (no length).
         + 8              -- BMHD header
@@ -267,7 +269,7 @@ local function writeFile(sprite, frObj, isPbm)
         strpack(">I4", formLength),
         formatHeader,
         "BMHD",
-        strpack(">I4", 20),             -- Chunk length. (5 words * 4)
+        strpack(">I4", 20),             -- Chunk length.
         strpack(">I2", wSprite),        -- 1. width
         strpack(">I2", hSprite),        -- 1. height
         strpack(">I2", 0),              -- 2. xOrig
@@ -275,13 +277,12 @@ local function writeFile(sprite, frObj, isPbm)
         strpack(">I4", planes << 0x18), -- 3. planes, mask, compression
         strpack(">I2", alphaIndex),     -- 4. alpha mask
         strpack(">I1", xAspect),        -- 4. aspect ratio x
-        strpack(">I1", yAspect),        -- 4.aspect ratio y
+        strpack(">I1", yAspect),        -- 4. aspect ratio y
         strpack(">I2", wSprite),        -- 5. page width
         strpack(">I2", hSprite),        -- 5. page height
+        "CMAP",
+        strpack(">I4", lenCmapData)
     }
-
-    binData[#binData + 1] = "CMAP"
-    binData[#binData + 1] = strpack(">I4", lenCmapData)
 
     local i = 0
     local lenPaletteClamped = min(256, lenPaletteActual)
@@ -415,6 +416,7 @@ local function readFile(importFilepath, aspectResponse)
     local lenBinData = #binData
     local chunkLen = 4
 
+    local lenForm = 0
     local wImage = 1
     local hImage = 1
     local planes = 0
@@ -454,9 +456,9 @@ local function readFile(importFilepath, aspectResponse)
         local headerlc = strlower(header)
         if headerlc == "form" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
-            local lenInt = strunpack(">I4", lenStr)
+            lenForm = strunpack(">I4", lenStr)
             print(strfmt("\nFORM found. Cursor: %d.\nlenInt: %d",
-                cursor, lenInt))
+                cursor, lenForm))
             chunkLen = 8
         elseif headerlc == "ilbm" then
             print(strfmt("\nILBM found. Cursor: %d.", cursor))
@@ -571,9 +573,19 @@ local function readFile(importFilepath, aspectResponse)
             -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
             -- TODO: This allows the possibility of non-contiguous indices, so
             -- you'll have to redo your colorCycle palettes format.
+            -- Found for "DLDLabel.ham"
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
+            -- typedef struct {
+            --     WORD  direction;    /* 0 = don't cycle.  1 = cycle forwards      */
+            --                         /* (1, 2, 3). -1 = cycle backwards (3, 2, 1) */
+            --     UBYTE start, end;   /* lower and upper color registers selected  */
+            --     LONG  seconds;      /* # seconds between changing colors plus... */
+            --     LONG  microseconds; /* # microseconds between changing colors    */
+            --     WORD  pad;          /* reserved for future use; store 0 here     */
+            --     } CycleInfo;
+
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("\nCCRT found. Cursor: %d.\nlenLocal: %d",
@@ -632,6 +644,12 @@ local function readFile(importFilepath, aspectResponse)
 
                 local span = 1 + dest - orig
                 if span > 1 then
+                    -- "The field rate determines the speed at which the colors
+                    -- will step when color cycling is on. The units are such
+                    -- that a rate of 60 steps per second is represented as
+                    -- 2^14 = 16384. Slower rates can be obtained by linear
+                    -- scaling: for 30 steps/second, rate = 8192; for 1
+                    -- step/second, rate = 16384/60 ~273."
                     local rateStr = strsub(binData, cursor + 10, cursor + 11)
                     local rate = strunpack(">I2", rateStr)
                     print(strfmt("rate: %d", rate))
@@ -661,8 +679,9 @@ local function readFile(importFilepath, aspectResponse)
             if wImage >= 640 then isHighRes = true end
             if hImage >= 400 then isInterlaced = true end
 
-            if isInterlaced and xAspect == 16 and yAspect == 11 then
-                -- Fudge the aspect for double-wide images.
+            if wImage >= 640 and hImage >= 400
+                and (xAspect / yAspect) > 1.4142 then
+                print("Fudge aspect ratio.")
                 xAspect = 1
                 yAspect = 1
             end
@@ -700,7 +719,6 @@ local function readFile(importFilepath, aspectResponse)
                 print(strfmt("Decompressed: %d", #bytes))
             end
 
-            -- TODO: Support true color.
             if isPbm then
                 pixels = bytes
             else
@@ -827,7 +845,9 @@ local function readFile(importFilepath, aspectResponse)
                 chunkLen = chunkLen + 1
             end
         else
-            if cursor <= lenBinData and #headerlc >= 4 then
+            -- Some files will fill with junk data beyond the length
+            -- specified by the form.
+            if cursor <= lenForm + 8 and #headerlc >= 4 then
                 chunkLen = 4
 
                 print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
@@ -1007,6 +1027,7 @@ local function readFile(importFilepath, aspectResponse)
     if aspectResponse == "BAKE" then
         sprite:resize(wSprite * xaReduced, hSprite * yaReduced)
     end
+
     return sprite
 end
 
@@ -1072,6 +1093,7 @@ dlg:button {
 
         local sprite = readFile(importFilepath, aspectResponse)
         if sprite then
+            app.frame = sprite.frames[1]
             app.command.FitScreen()
             app.refresh()
         end
