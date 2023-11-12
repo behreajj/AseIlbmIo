@@ -214,7 +214,7 @@ local function writeFile(sprite, frObj, isPbm)
                 isTrueColor24 = true
                 planes = 24
             else
-                isTrueColor32 = true
+                -- isTrueColor32 = true
                 planes = 32
             end
 
@@ -421,7 +421,7 @@ local function readFile(importFilepath, aspectResponse)
     local maxFrames = 1
     local currFrame = 0
 
-    ---@type {orig: integer, dest: integer, span: integer, isReverse: boolean}[]
+    ---@type {orig: integer, dest: integer, span: integer, duration: number, isReverse: boolean}[]
     local colorCycles = {}
 
     ---@type Color[]
@@ -468,7 +468,7 @@ local function readFile(importFilepath, aspectResponse)
 
             -- Word 2.
             local planesStr = strsub(binData, cursor + 16, cursor + 16)
-            local maskStr = strsub(binData, cursor + 17, cursor + 17)
+            -- local maskStr = strsub(binData, cursor + 17, cursor + 17)
             local comprStr = strsub(binData, cursor + 18, cursor + 18)
 
             -- Word 3.
@@ -518,9 +518,8 @@ local function readFile(importFilepath, aspectResponse)
                 local r8 = strbyte(binData, cursor + 8 + i3)
                 local g8 = strbyte(binData, cursor + 9 + i3)
                 local b8 = strbyte(binData, cursor + 10 + i3)
-                local aseColor = Color { r = r8, g = g8, b = b8, a = 255 }
                 i = i + 1
-                aseColors[i] = aseColor
+                aseColors[i] = Color { r = r8, g = g8, b = b8, a = 255 }
 
                 -- print(strfmt("%03d: %03d %03d %03d, #%06x",
                 --     i - 1, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
@@ -549,15 +548,12 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "drng" then
+            -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
+            -- TODO: Found in sample file "DLDLabel.ham".
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
             -- print(strfmt("\nDRNG found. Cursor: %d.\nlenLocal: %d",
             --     cursor, lenLocal))
-
-            -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
-            -- TODO: This allows the possibility of non-contiguous indices, so
-            -- you'll have to redo your colorCycle palettes format.
-            -- Found for "DLDLabel.ham"
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "ccrt" then
@@ -683,13 +679,12 @@ local function readFile(importFilepath, aspectResponse)
                 while i < 32 do
                     i = i + 1
                     local aseColor = aseColors[i]
-                    local ehbColor = Color {
+                    aseColors[32 + i] = Color {
                         r = aseColor.red >> 1,
                         g = aseColor.green >> 1,
                         b = aseColor.blue >> 1,
                         a = 255
                     }
-                    aseColors[32 + i] = ehbColor
                 end
             end
 
@@ -733,38 +728,37 @@ local function readFile(importFilepath, aspectResponse)
                 end
 
                 local wordsPerRow = math.ceil(wImage / 16)
+                local widthPlanes = wImage * planes
                 local filler = isTrueColor24 and 0xff000000 or 0
 
-                -- TODO: This needs to be rewritten, flattened if possible.
+                -- TODO: This needs to be rewritten.
                 local y = 0
                 while y < hImage do
                     ---@type integer[]
                     local pxRow = {}
                     local yWord = y * planes
 
-                    local z = 0
-                    while z < planes do
+                    local n = 0
+                    while n < widthPlanes do
+                        local z = n // wImage
+                        local x = n % wImage
                         local flatWord = (z + yWord) * wordsPerRow
+                        local xWord = x // 16
+                        -- TODO: Is there a way to get 2 bytes from the original
+                        -- array and composite them here?
+                        local word = words[1 + xWord + flatWord]
 
-                        local x = 0
-                        while x < wImage do
-                            local xWord = x // 16
-                            local word = words[1 + xWord + flatWord]
-
-                            local xBit = x % 16
-                            local shift = 15 - xBit
-                            local bit = (word >> shift) & 1
-                            local composite = pxRow[1 + x]
-                            if composite then
-                                pxRow[1 + x] = composite | (bit << z)
-                            else
-                                pxRow[1 + x] = bit << z
-                            end
-
-                            x = x + 1
+                        local xBit = x % 16
+                        local shift = 15 - xBit
+                        local bit = (word >> shift) & 1
+                        local composite = pxRow[1 + x]
+                        if composite then
+                            pxRow[1 + x] = composite | (bit << z)
+                        else
+                            pxRow[1 + x] = bit << z
                         end
 
-                        z = z + 1
+                        n = n + 1
                     end
 
                     -- print(table.concat(pxRow, ", "))
