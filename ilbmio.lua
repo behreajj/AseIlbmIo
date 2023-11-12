@@ -430,7 +430,10 @@ local function readFile(importFilepath, aspectResponse)
     local isHam = false
     local isTrueColor24 = false
     local isTrueColor32 = false
+
     local sumDuration = 0.0
+    local maxFrames = 1
+    local currFrame = 0
 
     ---@type {orig: integer, dest: integer, span: integer, isReverse: boolean}[]
     local colorCycles = {}
@@ -668,27 +671,6 @@ local function readFile(importFilepath, aspectResponse)
             end
 
             chunkLen = 8 + lenLocal
-        elseif headerlc == "xbmi" then
-            local lenStr = strsub(binData, cursor + 4, cursor + 7)
-            local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nXBMI found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
-
-            -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.XBMI
-            -- 0 PALETTE
-            -- 1 GRAY black = 0, white = (1 << depth) - 1
-            -- 2 RGB bits per sample = depth / 3, samples per pixel = 3.
-            -- 3 RGBA bits per sample = depth / 4, samples per pixel = 4.
-            -- 4 CMYK
-            -- 5 CMYKA
-            -- 6 Black or white
-            local clrFmtStr = strsub(binData, cursor + 8, cursor + 9)
-            local clrFmtFlag = strunpack(">I2", clrFmtStr)
-            if clrFmtFlag == 2 then isTrueColor24 = true end
-            if clrFmtFlag == 3 then isTrueColor32 = true end
-            print(strfmt("clrFmt: %d, 0x%04x", clrFmtFlag, clrFmtFlag))
-
-            chunkLen = 8 + lenLocal
         elseif headerlc == "body" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
@@ -813,11 +795,11 @@ local function readFile(importFilepath, aspectResponse)
             end
 
             chunkLen = 8 + lenLocal
-        elseif headerlc == "auth" then
-            -- Author.
+        elseif headerlc == "anhd" then
+            -- https://wiki.amigaos.net/wiki/ANIM_IFF_CEL_Animations#ANHD
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nAUTH found. Cursor: %d\nlenLocal: %d",
+            print(strfmt("\nANHD found. Cursor: %d\nlenLocal: %d",
                 cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
@@ -827,6 +809,33 @@ local function readFile(importFilepath, aspectResponse)
             local lenLocal = strunpack(">I4", lenStr)
             print(strfmt("\nANNO found. Cursor: %d\nlenLocal: %d",
                 cursor, lenLocal))
+
+            chunkLen = 8 + lenLocal
+        elseif headerlc == "auth" then
+            -- Author.
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("\nAUTH found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
+            chunkLen = 8 + lenLocal
+        elseif headerlc == "dlta" then
+            -- https://wiki.amigaos.net/wiki/ANIM_IFF_CEL_Animations#DLTA
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("\nDLTA found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+            chunkLen = 8 + lenLocal
+        elseif headerlc == "dpan" then
+            -- https://wiki.amigaos.net/wiki/ANIM_IFF_CEL_Animations#DPAN
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("\nDPAN found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
+            local frCountStr = strsub(binData, cursor + 10, cursor + 11)
+            maxFrames = strunpack(">I2", frCountStr)
+            print(strfmt("frCount: %d", maxFrames))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "dpi " then
@@ -867,10 +876,33 @@ local function readFile(importFilepath, aspectResponse)
             while strbyte(binData, cursor + chunkLen) == 0 do
                 chunkLen = chunkLen + 1
             end
+        elseif headerlc == "xbmi" then
+            -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.XBMI
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("\nXBMI found. Cursor: %d\nlenLocal: %d",
+                cursor, lenLocal))
+
+            -- 0 PALETTE
+            -- 1 GRAY black = 0, white = (1 << depth) - 1
+            -- 2 RGB bits per sample = depth / 3, samples per pixel = 3.
+            -- 3 RGBA bits per sample = depth / 4, samples per pixel = 4.
+            -- 4 CMYK
+            -- 5 CMYKA
+            -- 6 Black or white
+            local clrFmtStr = strsub(binData, cursor + 8, cursor + 9)
+            local clrFmtFlag = strunpack(">I2", clrFmtStr)
+            if clrFmtFlag == 2 then isTrueColor24 = true end
+            if clrFmtFlag == 3 then isTrueColor32 = true end
+            print(strfmt("clrFmt: %d, 0x%04x", clrFmtFlag, clrFmtFlag))
+
+            chunkLen = 8 + lenLocal
         else
             -- Some files will fill with junk data beyond the length
             -- specified by the form.
-            if cursor <= lenForm + 8 and #headerlc >= 4 then
+            if cursor <= lenForm + 8
+                and currFrame <= maxFrames
+                and #headerlc >= 4 then
                 chunkLen = 4
 
                 print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
