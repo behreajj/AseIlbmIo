@@ -140,7 +140,7 @@ local function writeFile(sprite, frObj, isPbm)
     local flat = Image(flatSpec)
 
     local isTrueColor24 = false
-    local isTrueColor32 = false
+    -- local isTrueColor32 = false
     local writeCmap = true
 
     if spriteSpec.colorMode == ColorMode.INDEXED then
@@ -307,52 +307,40 @@ local function writeFile(sprite, frObj, isPbm)
     else
         local bytesPerRow = ceil(wSprite / 16) * 2
 
-        -- TODO: Rewrite all this.
         local y = 0
         while y < hSprite do
-            -- Init 2D array to zero.
-            ---@type integer[][]
+            ---@type integer[]
             local row = {}
-            local z0 = 0
-            while z0 < planes do
-                ---@type integer[]
-                local col = {}
-                local w0 = 0
-                while w0 < bytesPerRow do
-                    w0 = w0 + 1
-                    col[w0] = 0
-                end
-                z0 = z0 + 1
-                row[z0] = col
+            local bprPlanes = planes * bytesPerRow
+            local i = 0
+            while i < bprPlanes do
+                i = i + 1
+                row[i] = 0
             end
 
+            -- TODO: Rewrite all this.
             local x = 0
             while x < wSprite do
                 local pixel = pixels[1 + x + y * wSprite]
+                local xshr3 = x >> 3
 
-                local z1 = 0
-                while z1 < planes do
-                    if pixel & (1 << z1) ~= 0 then
-                        local xshr3 = x >> 3
-                        local char = row[1 + z1][1 + xshr3]
-                        row[1 + z1][1 + xshr3] = char | 0x80 >> (x & 7)
+                local z = 0
+                while z < planes do
+                    if pixel & (1 << z) ~= 0 then
+                        local idxFlat = 1 + z * bytesPerRow + xshr3
+                        local char = row[idxFlat]
+                        row[idxFlat] = char | 0x80 >> (x & 7)
                     end
-                    z1 = z1 + 1
+                    z = z + 1
                 end
 
                 x = x + 1
             end
 
-            -- Write to binary.
-            local z2 = 0
-            while z2 < planes do
-                z2 = z2 + 1
-                local col = row[z2]
-                local w2 = 0
-                while w2 < bytesPerRow do
-                    w2 = w2 + 1
-                    binData[#binData + 1] = strchar(col[w2])
-                end
+            local j = 0
+            while j < bprPlanes do
+                j = j + 1
+                binData[#binData + 1] = strchar(row[j])
             end
 
             y = y + 1
@@ -451,25 +439,25 @@ local function readFile(importFilepath, aspectResponse)
         if headerlc == "form" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             lenForm = strunpack(">I4", lenStr)
-            print(strfmt("\nFORM found. Cursor: %d.\nlenForm: %d",
-                cursor, lenForm))
+            -- print(strfmt("\nFORM found. Cursor: %d.\nlenForm: %d",
+            --     cursor, lenForm))
             chunkLen = 8
         elseif headerlc == "ilbm" then
-            print(strfmt("\nILBM found. Cursor: %d.", cursor))
+            -- print(strfmt("\nILBM found. Cursor: %d.", cursor))
             chunkLen = 4
         elseif headerlc == "pbm " then
-            print(strfmt("\nPBM found. Cursor: %d.", cursor))
+            -- print(strfmt("\nPBM found. Cursor: %d.", cursor))
             isPbm = true
             chunkLen = 4
         elseif headerlc == "anim" then
             isAnim = true
-            print(strfmt("\nANIM found. Cursor: %d.", cursor))
+            -- print(strfmt("\nANIM found. Cursor: %d.", cursor))
             chunkLen = 4
         elseif headerlc == "bmhd" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nBMHD found. Cursor: %d.\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nBMHD found. Cursor: %d.\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             -- Word 1.
             local wStr = strsub(binData, cursor + 8, cursor + 9)
@@ -478,7 +466,7 @@ local function readFile(importFilepath, aspectResponse)
             hImage = strunpack(">I2", hStr)
             wSprite = wImage
             hSprite = hImage
-            print(strfmt("width: %d\nheight: %d", wImage, hImage))
+            -- print(strfmt("width: %d\nheight: %d", wImage, hImage))
 
             -- Word 2.
             local planesStr = strsub(binData, cursor + 16, cursor + 16)
@@ -487,17 +475,17 @@ local function readFile(importFilepath, aspectResponse)
 
             -- Word 3.
             planes = strunpack(">I1", planesStr)
-            masking = strunpack(">I1", maskStr)
+            -- masking = strunpack(">I1", maskStr)
             compressed = strunpack(">I1", comprStr)
             isTrueColor24 = planes == 24
             isTrueColor32 = planes == 32
-            print(strfmt(
-                "planes: %d\nmasking: %d\ncompressed: %d",
-                planes, masking, compressed))
+            -- print(strfmt(
+            --     "planes: %d\nmasking: %d\ncompressed: %d",
+            --     planes, masking, compressed))
 
-            if isTrueColor24 or isTrueColor32 then
-                print("True color image.")
-            end
+            -- if isTrueColor24 or isTrueColor32 then
+            --     print("True color image.")
+            -- end
 
             -- Word 4.
             local trclStr = strsub(binData, cursor + 20, cursor + 21)
@@ -506,26 +494,26 @@ local function readFile(importFilepath, aspectResponse)
             alphaIndex = strunpack(">I2", trclStr)
             xAspect = strunpack(">I1", xAspStr)
             yAspect = strunpack(">I1", yAspStr)
-            print(strfmt("alphaIndex: %d", alphaIndex))
-            print(strfmt("xAspect: %d", xAspect))
-            print(strfmt("yAspect: %d", yAspect))
+            -- print(strfmt("alphaIndex: %d", alphaIndex))
+            -- print(strfmt("xAspect: %d", xAspect))
+            -- print(strfmt("yAspect: %d", yAspect))
 
             -- Word 5.
             local pgwStr = strsub(binData, cursor + 24, cursor + 25)
             local pghStr = strsub(binData, cursor + 26, cursor + 27)
             wSprite = strunpack(">I2", pgwStr)
             hSprite = strunpack(">I2", pghStr)
-            print(strfmt("wSprite: %d\nhSprite: %d", wSprite, hSprite))
+            -- print(strfmt("wSprite: %d\nhSprite: %d", wSprite, hSprite))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "cmap" then
-            print(strfmt("\nCMAP found. Cursor: %d.", cursor))
+            -- print(strfmt("\nCMAP found. Cursor: %d.", cursor))
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("lenLocal: %d", lenLocal))
+            -- print(strfmt("lenLocal: %d", lenLocal))
 
             local numColors = lenLocal // 3
-            print(strfmt("numColors: %d", numColors))
+            -- print(strfmt("numColors: %d", numColors))
             local i = 0
             while i < numColors do
                 local i3 = i * 3
@@ -536,37 +524,37 @@ local function readFile(importFilepath, aspectResponse)
                 i = i + 1
                 aseColors[i] = aseColor
 
-                print(strfmt("%03d: %03d %03d %03d, #%06x",
-                    i - 1, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
+                -- print(strfmt("%03d: %03d %03d %03d, #%06x",
+                --     i - 1, r8, g8, b8, r8 << 0x10 | g8 << 0x08 | b8))
             end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "camg" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nCAMG found. Cursor: %d.\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nCAMG found. Cursor: %d.\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             local flagsStr = strsub(binData, cursor + 8, cursor + 11)
             local flags = strunpack(">I4", flagsStr)
-            print(strfmt("flags: %d, 0x%04x", flags, flags))
+            -- print(strfmt("flags: %d, 0x%04x", flags, flags))
 
             isHighRes = (flags & 0x8000) ~= 0
             isHam = (flags & 0x800) ~= 0
             isExtraHalf = (flags & 0x80) ~= 0
             isInterlaced = (flags & 0x4) ~= 0
 
-            if isHighRes then print("High res.") end
-            if isHam then print("HAM.") end
-            if isExtraHalf then print("Extra Half Bright") end
-            if isInterlaced then print("Interlaced") end
+            -- if isHighRes then print("High res.") end
+            -- if isHam then print("HAM.") end
+            -- if isExtraHalf then print("Extra Half Bright") end
+            -- if isInterlaced then print("Interlaced") end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "drng" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nDRNG found. Cursor: %d.\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nDRNG found. Cursor: %d.\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.DRNG
             -- TODO: This allows the possibility of non-contiguous indices, so
@@ -577,12 +565,12 @@ local function readFile(importFilepath, aspectResponse)
         elseif headerlc == "ccrt" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nCCRT found. Cursor: %d.\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nCCRT found. Cursor: %d.\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             local dirStr = strsub(binData, cursor + 8, cursor + 9)
             local dir = strunpack(">i2", dirStr)
-            print(strfmt("dir: %d", dir))
+            -- print(strfmt("dir: %d", dir))
 
             if dir ~= 0 then
                 local origStr = strsub(binData, cursor + 10, cursor + 10)
@@ -600,14 +588,15 @@ local function readFile(importFilepath, aspectResponse)
                     local seconds = strunpack(">I4", secsStr)
                     local micros = strunpack(">I4", microStr)
                     if seconds > 0 or micros > 0 then
-                        print(strfmt("orig: %d,\ndest: %d\nseconds: %d\nmicros: %d",
-                            orig, dest, seconds, micros))
+                        -- print(strfmt(
+                        --     "orig: %d,\ndest: %d\nseconds: %d\nmicros: %d",
+                        --     orig, dest, seconds, micros))
 
                         local duration = seconds + micros * 0.000001
                         sumDuration = sumDuration + duration
-                        print(strfmt(
-                            "duration: %.6s, %dms",
-                            duration, floor(0.5 + duration * 1000.0)))
+                        -- print(strfmt(
+                        --     "duration: %.6s, %dms",
+                        --     duration, floor(0.5 + duration * 1000.0)))
 
                         colorCycles[#colorCycles + 1] = {
                             orig = orig,
@@ -624,15 +613,15 @@ local function readFile(importFilepath, aspectResponse)
         elseif headerlc == "crng" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nCRNG found. Cursor: %d.\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nCRNG found. Cursor: %d.\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             local flagsStr = strsub(binData, cursor + 12, cursor + 13)
             local flags = strunpack(">I2", flagsStr)
-            print(strfmt("flags: %d 0x%04x", flags, flags))
-            if ((flags >> 1) & 1) ~= 0 then
-                print("isReversed")
-            end
+            -- print(strfmt("flags: %d 0x%04x", flags, flags))
+            -- if ((flags >> 1) & 1) ~= 0 then
+            -- print("isReversed")
+            -- end
 
             -- In many test files, these CRNG tags contain crud data, such as
             -- zero flags, orig and dest being equal, or rate being zero.
@@ -643,7 +632,7 @@ local function readFile(importFilepath, aspectResponse)
                 local orig = strunpack(">I1", origStr)
                 local dest = strunpack(">I1", destStr)
 
-                print(strfmt("orig: %d,\ndest: %d", orig, dest))
+                -- print(strfmt("orig: %d,\ndest: %d", orig, dest))
 
                 local span = 1 + dest - orig
                 if span > 1 then
@@ -655,9 +644,9 @@ local function readFile(importFilepath, aspectResponse)
                         local duration = 273.06666666667 / rate
                         sumDuration = sumDuration + duration
 
-                        print(strfmt(
-                            "rate: %d, duration: %.6s, %dms",
-                            rate, duration, floor(0.5 + duration * 1000.0)))
+                        -- print(strfmt(
+                        --     "rate: %d, duration: %.6s, %dms",
+                        --     rate, duration, floor(0.5 + duration * 1000.0)))
 
                         colorCycles[#colorCycles + 1] = {
                             orig = orig,
@@ -674,8 +663,8 @@ local function readFile(importFilepath, aspectResponse)
         elseif headerlc == "body" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nBODY found. Cursor: %d.\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nBODY found. Cursor: %d.\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             bodyFound = true
 
@@ -686,7 +675,7 @@ local function readFile(importFilepath, aspectResponse)
 
             if wImage >= 640 and hImage >= 400
                 and (xAspect / yAspect) > 1.4142 then
-                print("Fudge aspect ratio.")
+                -- print("Fudge aspect ratio.")
                 xAspect = 1
                 yAspect = 1
             end
@@ -721,7 +710,7 @@ local function readFile(importFilepath, aspectResponse)
 
             if compressed == 1 then
                 bytes = decompress(bytes)
-                print(strfmt("Decompressed: %d", #bytes))
+                -- print(strfmt("Decompressed: %d", #bytes))
             end
 
             if isPbm then
@@ -799,75 +788,75 @@ local function readFile(importFilepath, aspectResponse)
             -- https://wiki.amigaos.net/wiki/ANIM_IFF_CEL_Animations#ANHD
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nANHD found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nANHD found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "anno" then
             -- Annotation.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nANNO found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nANNO found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "auth" then
             -- Author.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nAUTH found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nAUTH found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "dlta" then
             -- https://wiki.amigaos.net/wiki/ANIM_IFF_CEL_Animations#DLTA
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nDLTA found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nDLTA found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
             chunkLen = 8 + lenLocal
         elseif headerlc == "dpan" then
             -- https://wiki.amigaos.net/wiki/ANIM_IFF_CEL_Animations#DPAN
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nDPAN found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nDPAN found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             local frCountStr = strsub(binData, cursor + 10, cursor + 11)
             maxFrames = strunpack(">I2", frCountStr)
-            print(strfmt("frCount: %d", maxFrames))
+            -- print(strfmt("frCount: %d", maxFrames))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "dpi " then
             -- Divets per inch.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nDPI found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nDPI found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "dpps" then
             -- Don't know what this is, but it's found in the King Tut image.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nDPPS found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nDPPS found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "dppv" then
             -- Perspective and transformation.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nDDPV found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nDDPV found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "tiny" then
             -- Thumbnail.
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nTINY found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nTINY found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
 
@@ -880,8 +869,8 @@ local function readFile(importFilepath, aspectResponse)
             -- https://wiki.amigaos.net/wiki/ILBM_IFF_Interleaved_Bitmap#ILBM.XBMI
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nXBMI found. Cursor: %d\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nXBMI found. Cursor: %d\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             -- 0 PALETTE
             -- 1 GRAY black = 0, white = (1 << depth) - 1
@@ -894,7 +883,7 @@ local function readFile(importFilepath, aspectResponse)
             local clrFmtFlag = strunpack(">I2", clrFmtStr)
             if clrFmtFlag == 2 then isTrueColor24 = true end
             if clrFmtFlag == 3 then isTrueColor32 = true end
-            print(strfmt("clrFmt: %d, 0x%04x", clrFmtFlag, clrFmtFlag))
+            -- print(strfmt("clrFmt: %d, 0x%04x", clrFmtFlag, clrFmtFlag))
 
             chunkLen = 8 + lenLocal
         else
@@ -905,9 +894,9 @@ local function readFile(importFilepath, aspectResponse)
                 and #headerlc >= 4 then
                 chunkLen = 4
 
-                print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
-                    cursor, headerlc))
-                return nil
+                -- print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
+                --     cursor, headerlc))
+                -- return nil
             end
         end
 
@@ -986,7 +975,7 @@ local function readFile(importFilepath, aspectResponse)
     end
 
     local lenColorCycles = #colorCycles
-    print(strfmt("\nlenColorCycles: %d", lenColorCycles))
+    -- print(strfmt("\nlenColorCycles: %d", lenColorCycles))
     if lenColorCycles > 0 then
         -- TODO: Do color cycling indices work differently for extra half brite?
         local avgDuration = sumDuration / lenColorCycles
@@ -1020,7 +1009,7 @@ local function readFile(importFilepath, aspectResponse)
 
             requiredFrames = lcm(requiredFrames, span)
         end
-        print(strfmt("Least common multiple: %d", requiredFrames))
+        -- print(strfmt("Least common multiple: %d", requiredFrames))
 
         if requiredFrames <= defaults.maxFrames then
             -- Copy still image to new frames.
