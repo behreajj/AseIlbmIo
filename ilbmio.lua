@@ -709,24 +709,6 @@ local function readFile(importFilepath, aspectResponse)
             if isPbm then
                 pixels = bytes
             else
-                ---@type integer[]
-                local words = {}
-                local lenBytes = #bytes
-                local j = 0
-                while j < lenBytes do
-                    local j_2 = j // 2
-                    -- For unsigned byte.
-                    -- If signed byte, mask by byte & 0xff.
-                    local ubyte1 = bytes[1 + j]
-                    local ubyte0 = bytes[2 + j]
-
-                    words[1 + j_2] = ubyte1 << 0x08 | ubyte0
-                    j = j + 2
-
-                    -- print(strfmt("word: %04X", words[1 + j_2]))
-                    -- if j >= 10 then return nil end
-                end
-
                 local wordsPerRow = math.ceil(wImage / 16)
                 local widthPlanes = wImage * planes
                 local filler = isTrueColor24 and 0xff000000 or 0
@@ -744,9 +726,11 @@ local function readFile(importFilepath, aspectResponse)
                         local x = n % wImage
                         local flatWord = (z + yWord) * wordsPerRow
                         local xWord = x // 16
-                        -- TODO: Is there a way to get 2 bytes from the original
-                        -- array and composite them here?
-                        local word = words[1 + xWord + flatWord]
+                        local idxWord = xWord + flatWord
+                        local idxChar = idxWord * 2
+                        local byte1 = bytes[1 + idxChar]
+                        local byte2 = bytes[2 + idxChar]
+                        local word = (byte1 << 0x08) | byte2
 
                         local xBit = x % 16
                         local shift = 15 - xBit
