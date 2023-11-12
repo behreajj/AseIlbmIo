@@ -102,6 +102,7 @@ local function writeFile(sprite, frObj, isPbm)
     local log = math.log
     local max = math.max
     local min = math.min
+    local modf = math.modf
 
     -- Unpack sprite.
     local spriteSpec = sprite.spec
@@ -306,35 +307,32 @@ local function writeFile(sprite, frObj, isPbm)
         end
     else
         local bytesPerRow = ceil(wSprite / 16) * 2
+        local bprPlanes = planes * bytesPerRow
+        local widthPlanes = wSprite * planes
 
         local y = 0
         while y < hSprite do
             ---@type integer[]
             local row = {}
-            local bprPlanes = planes * bytesPerRow
-            local i = 0
-            while i < bprPlanes do
-                i = i + 1
-                row[i] = 0
+            local h = 0
+            while h < bprPlanes do
+                h = h + 1
+                row[h] = 0
             end
 
-            -- TODO: Rewrite all this.
-            local x = 0
-            while x < wSprite do
-                local pixel = pixels[1 + x + y * wSprite]
-                local xshr3 = x >> 3
-
-                local z = 0
-                while z < planes do
-                    if pixel & (1 << z) ~= 0 then
-                        local idxFlat = 1 + z * bytesPerRow + xshr3
-                        local char = row[idxFlat]
-                        row[idxFlat] = char | 0x80 >> (x & 7)
-                    end
-                    z = z + 1
+            local ywSprite = y * wSprite
+            local i = 0
+            while i < widthPlanes do
+                local x = i // planes
+                local z = i % planes
+                local pixel = pixels[1 + x + ywSprite]
+                if pixel & (1 << z) ~= 0 then
+                    local xFlr = x // 8
+                    local xRem = x % 8
+                    local idxFlat = 1 + xFlr + z * bytesPerRow
+                    row[idxFlat] = row[idxFlat]| 0x80 >> xRem
                 end
-
-                x = x + 1
+                i = i + 1
             end
 
             local j = 0
