@@ -721,8 +721,6 @@ local function readFile(importFilepath, aspectResponse)
 
                 local y = 0
                 while y < hImage do
-                    ---@type integer[]
-                    local pxRow = {}
                     local yWord = y * planes
 
                     local n = 0
@@ -731,8 +729,7 @@ local function readFile(importFilepath, aspectResponse)
                         local x = n % wImage
                         local flatWord = (z + yWord) * wordsPerRow
                         local xWord = x // 16
-                        local idxWord = xWord + flatWord
-                        local idxChar = idxWord * 2
+                        local idxChar = (xWord + flatWord) * 2
                         local byte1 = bytes[1 + idxChar]
                         local byte2 = bytes[2 + idxChar]
                         local word = (byte1 << 0x08) | byte2
@@ -740,23 +737,18 @@ local function readFile(importFilepath, aspectResponse)
                         local xBit = x % 16
                         local shift = 15 - xBit
                         local bit = (word >> shift) & 1
-                        local composite = pxRow[1 + x]
-                        if composite then
-                            pxRow[1 + x] = composite | (bit << z)
+
+                        local idx = 1 + x + y * wImage
+                        local hex = pixels[idx]
+                        if hex then
+                            pixels[idx] = hex | (bit << z)
                         else
-                            pxRow[1 + x] = bit << z
+                            pixels[idx] = filler | (bit << z)
                         end
 
                         n = n + 1
                     end
 
-                    -- TODO: Is there a way that this step can be skipped?
-                    local lenPxRow = #pxRow
-                    local k = 0
-                    while k < lenPxRow do
-                        k = k + 1
-                        pixels[#pixels + 1] = filler | pxRow[k]
-                    end
                     y = y + 1
                 end
             end
