@@ -1,6 +1,6 @@
 local uiAvailable = app.isUIAvailable
 
-local importFileTypes = { "iff", "ilbm", "lbm" }
+local importFileTypes = { "acbm", "iff", "ilbm", "lbm" }
 local exportFileTypes = { "ilbm", "lbm" }
 local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
@@ -102,7 +102,6 @@ local function writeFile(sprite, frObj, isPbm)
     local log = math.log
     local max = math.max
     local min = math.min
-    local modf = math.modf
 
     -- Unpack sprite.
     local spriteSpec = sprite.spec
@@ -184,6 +183,8 @@ local function writeFile(sprite, frObj, isPbm)
             end
         end
     else
+        -- Default to RGB color mode.
+
         local palIdx = 1
         local frIdx = frObj.frameNumber
         local lenPalettes = #palettes
@@ -191,7 +192,6 @@ local function writeFile(sprite, frObj, isPbm)
         palette = palettes[palIdx]
         lenPaletteActual = #palette
 
-        -- RGB color mode.
         if isPbm then
             flat:drawSprite(sprite, frObj)
             local pxItr = flat:pixels()
@@ -214,7 +214,6 @@ local function writeFile(sprite, frObj, isPbm)
                 isTrueColor24 = true
                 planes = 24
             else
-                -- isTrueColor32 = true
                 planes = 32
             end
 
@@ -223,8 +222,7 @@ local function writeFile(sprite, frObj, isPbm)
             flat:drawSprite(sprite, frObj)
             local pxItr = flat:pixels()
             for pixel in pxItr do
-                local abgr32 = pixel()
-                pixels[#pixels + 1] = mask & abgr32
+                pixels[#pixels + 1] = mask & pixel()
             end
         end
     end
@@ -335,6 +333,8 @@ local function writeFile(sprite, frObj, isPbm)
                 i = i + 1
             end
 
+            -- TODO: Can compression be offered before this step? Is it done
+            -- on a per-row basis?
             local j = 0
             while j < bprPlanes do
                 j = j + 1
@@ -409,6 +409,7 @@ local function readFile(importFilepath, aspectResponse)
     local hSprite = 1
 
     local isPbm = false
+    local isAcbm = false
     local isAnim = false
     local isExtraHalf = false
     local isHighRes = false
@@ -434,6 +435,7 @@ local function readFile(importFilepath, aspectResponse)
     while cursor <= lenBinData do
         local header = strsub(binData, cursor, cursor + 3)
         local headerlc = strlower(header)
+
         if headerlc == "form" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             lenForm = strunpack(">I4", lenStr)
@@ -446,6 +448,10 @@ local function readFile(importFilepath, aspectResponse)
         elseif headerlc == "pbm " then
             -- print(strfmt("\nPBM found. Cursor: %d.", cursor))
             isPbm = true
+            chunkLen = 4
+        elseif headerlc == "acbm" then
+            print(strfmt("\nACBM found. Cursor: %d.", cursor))
+            isAcbm = true
             chunkLen = 4
         elseif headerlc == "anim" then
             isAnim = true
@@ -664,8 +670,8 @@ local function readFile(importFilepath, aspectResponse)
 
             -- CAMG chunk may be missing entirely, or occur before CMAP chunk,
             -- so this needs to wait until body to figure out...
-            if wImage >= 640 then isHighRes = true end
-            if hImage >= 400 then isInterlaced = true end
+            -- if wImage >= 640 then isHighRes = true end
+            -- if hImage >= 400 then isInterlaced = true end
 
             if wImage >= 640 and hImage >= 400
                 and (xAspect / yAspect) > 1.4142 then
@@ -713,7 +719,6 @@ local function readFile(importFilepath, aspectResponse)
                 local widthPlanes = wImage * planes
                 local filler = isTrueColor24 and 0xff000000 or 0
 
-                -- TODO: This needs to be rewritten.
                 local y = 0
                 while y < hImage do
                     ---@type integer[]
@@ -745,9 +750,6 @@ local function readFile(importFilepath, aspectResponse)
                         n = n + 1
                     end
 
-                    -- print(table.concat(pxRow, ", "))
-                    -- if y>=1 then return nil end
-
                     -- TODO: Is there a way that this step can be skipped?
                     local lenPxRow = #pxRow
                     local k = 0
@@ -758,6 +760,16 @@ local function readFile(importFilepath, aspectResponse)
                     y = y + 1
                 end
             end
+
+            chunkLen = 8 + lenLocal
+        elseif headerlc == "abit" then
+            -- TODO:
+            -- https://wiki.multimedia.cx/index.php/IFF#ACBM_and_ABIT
+            -- https://wiki.amigaos.net/wiki/ACBM_IFF_Amiga_Continuous_Bitmap
+            local lenStr = strsub(binData, cursor + 4, cursor + 7)
+            local lenLocal = strunpack(">I4", lenStr)
+            print(strfmt("\nABIT found. Cursor: %d.\nlenLocal: %d",
+                cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "anhd" then
@@ -870,9 +882,9 @@ local function readFile(importFilepath, aspectResponse)
                 and #headerlc >= 4 then
                 chunkLen = 4
 
-                -- print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
-                --     cursor, headerlc))
-                -- return nil
+                print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
+                    cursor, headerlc))
+                return nil
             end
         end
 
