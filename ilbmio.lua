@@ -1,6 +1,6 @@
 local uiAvailable = app.isUIAvailable
 
-local importFileTypes = { "acbm", "iff", "ilbm", "lbm" }
+local importFileTypes = { "iff", "ilbm", "lbm" }
 local exportFileTypes = { "ilbm", "lbm" }
 local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
@@ -385,7 +385,6 @@ local function readFile(importFilepath, aspectResponse)
     local strsub = string.sub
     local strunpack = string.unpack
     local strbyte = string.byte
-    local floor = math.floor
 
     local bodyFound = false
     local lenBinData = #binData
@@ -395,11 +394,6 @@ local function readFile(importFilepath, aspectResponse)
     local wImage = 1
     local hImage = 1
     local planes = 0
-    -- TODO: Handle these enum cases better.
-    -- mskNone an opaque image
-    -- mskHasMask
-    -- mskHasTransparentColor
-    -- mskLasso
     local masking = 0
     local compressed = 0
     local alphaIndex = 0
@@ -688,9 +682,9 @@ local function readFile(importFilepath, aspectResponse)
                     i = i + 1
                     local aseColor = aseColors[i]
                     aseColors[32 + i] = Color {
-                        r = aseColor.red >> 1,
-                        g = aseColor.green >> 1,
-                        b = aseColor.blue >> 1,
+                        r = aseColor.red // 2,
+                        g = aseColor.green // 2,
+                        b = aseColor.blue // 2,
                         a = 255
                     }
                 end
