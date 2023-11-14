@@ -694,7 +694,6 @@ local function readFile(importFilepath, aspectResponse)
                 end
             end
 
-            -- For decompression purposes, these bytes need to be signed?
             ---@type integer[]
             local bytes = {}
             local i = 0
@@ -717,39 +716,36 @@ local function readFile(importFilepath, aspectResponse)
             else
                 local wordsPerRow = math.ceil(wImage / 16)
                 local widthPlanes = wImage * planes
+                local len3 = hImage * widthPlanes
                 local filler = isTrueColor24 and 0xff000000 or 0
-
-                local y = 0
-                while y < hImage do
+                local k = 0
+                while k < len3 do
+                    local y = k // widthPlanes
                     local yWord = y * planes
+                    local n = k % widthPlanes
+                    local z = n // wImage
+                    local x = n % wImage
+                    local flatWord = (z + yWord) * wordsPerRow
+                    local xWord = x // 16
+                    -- Could probably simplify this by making xword //8 and
+                    -- using charsPerRow, etc.
+                    local idxChar = (xWord + flatWord) * 2
+                    local byte1 = bytes[1 + idxChar]
+                    local byte2 = bytes[2 + idxChar]
+                    local word = (byte1 << 0x08) | byte2
 
-                    local n = 0
-                    while n < widthPlanes do
-                        local z = n // wImage
-                        local x = n % wImage
-                        local flatWord = (z + yWord) * wordsPerRow
-                        local xWord = x // 16
-                        local idxChar = (xWord + flatWord) * 2
-                        local byte1 = bytes[1 + idxChar]
-                        local byte2 = bytes[2 + idxChar]
-                        local word = (byte1 << 0x08) | byte2
+                    local xBit = x % 16
+                    local shift = 15 - xBit
+                    local bit = (word >> shift) & 1
 
-                        local xBit = x % 16
-                        local shift = 15 - xBit
-                        local bit = (word >> shift) & 1
-
-                        local idx = 1 + x + y * wImage
-                        local hex = pixels[idx]
-                        if hex then
-                            pixels[idx] = hex | (bit << z)
-                        else
-                            pixels[idx] = filler | (bit << z)
-                        end
-
-                        n = n + 1
+                    local idx = 1 + x + y * wImage
+                    local hex = pixels[idx]
+                    if hex then
+                        pixels[idx] = hex | (bit << z)
+                    else
+                        pixels[idx] = filler | (bit << z)
                     end
-
-                    y = y + 1
+                    k = k + 1
                 end
             end
 
