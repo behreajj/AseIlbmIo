@@ -8,6 +8,8 @@ The minimum supported version of Aseprite is 1.2.40.
 
 The image tested in the screen shot above is the King Tut demo, sourced from [here](https://www.randelshofer.ch/animations/anims/electronic_arts/KingTut.ilbm.html).
 
+As this is a work in progress, bugs are likely. Please see the template when reporting issues.
+
 ## Download
 
 To download this script, click on the green Code button above, then select Download Zip. You can also click on the `ilbmio.lua` file. Beware that some browsers will append a `.txt` file format extension to script files on download. Aseprite will not recognize the script until this is removed and the original `.lua` extension is used. There can also be issues with copying and pasting. Be sure to click on the Raw file button; do not copy the formatted code.
