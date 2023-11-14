@@ -508,6 +508,8 @@ local function readFile(importFilepath, aspectResponse)
             wSprite = strunpack(">I2", pgwStr)
             hSprite = strunpack(">I2", pghStr)
             -- print(strfmt("wSprite: %d\nhSprite: %d", wSprite, hSprite))
+            if wSprite == 0 then wSprite = wImage end
+            if hSprite == 0 then hSprite = hImage end
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "cmap" then
@@ -721,21 +723,19 @@ local function readFile(importFilepath, aspectResponse)
                 local k = 0
                 while k < len3 do
                     local y = k // widthPlanes
-                    local yWord = y * planes
                     local n = k % widthPlanes
                     local z = n // wImage
                     local x = n % wImage
-                    local flatWord = (z + yWord) * wordsPerRow
-                    local xWord = x // 16
-                    -- Could probably simplify this by making xword //8 and
-                    -- using charsPerRow, etc.
-                    local idxChar = (xWord + flatWord) * 2
+
+                    local flatWord = (z + y * planes) * wordsPerRow
+                    local xFlr = x // 16
+                    local idxChar = (xFlr + flatWord) * 2
                     local byte1 = bytes[1 + idxChar]
                     local byte2 = bytes[2 + idxChar]
                     local word = (byte1 << 0x08) | byte2
 
-                    local xBit = x % 16
-                    local shift = 15 - xBit
+                    local xRem = x % 16
+                    local shift = 15 - xRem
                     local bit = (word >> shift) & 1
 
                     local idx = 1 + x + y * wImage
@@ -879,7 +879,11 @@ local function readFile(importFilepath, aspectResponse)
         cursor = cursor + chunkLen
     end
 
-    local xaReduced, yaReduced = reduceRatio(xAspect, yAspect)
+    local xaReduced = 1
+    local yaReduced = 1
+    if xAspect ~= 0 and yAspect ~= 0 then
+        xaReduced, yaReduced = reduceRatio(xAspect, yAspect)
+    end
     xaReduced = math.min(math.max(xaReduced, 1), defaults.maxAspect)
     yaReduced = math.min(math.max(yaReduced, 1), defaults.maxAspect)
 
