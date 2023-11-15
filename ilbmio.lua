@@ -448,7 +448,7 @@ local function readFile(importFilepath, aspectResponse)
             isPbm = true
             chunkLen = 4
         elseif headerlc == "acbm" then
-            print(strfmt("\nACBM found. Cursor: %d.", cursor))
+            -- print(strfmt("\nACBM found. Cursor: %d.", cursor))
             isAcbm = true
             chunkLen = 4
         elseif headerlc == "anim" then
@@ -755,13 +755,12 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "abit" then
-            -- TODO:
             -- https://wiki.multimedia.cx/index.php/IFF#ACBM_and_ABIT
             -- https://wiki.amigaos.net/wiki/ACBM_IFF_Amiga_Continuous_Bitmap
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
             local lenLocal = strunpack(">I4", lenStr)
-            print(strfmt("\nABIT found. Cursor: %d.\nlenLocal: %d",
-                cursor, lenLocal))
+            -- print(strfmt("\nABIT found. Cursor: %d.\nlenLocal: %d",
+            --     cursor, lenLocal))
 
             chunkLen = 8 + lenLocal
         elseif headerlc == "anhd" then
@@ -874,9 +873,9 @@ local function readFile(importFilepath, aspectResponse)
                 and #headerlc >= 4 then
                 chunkLen = 4
 
-                print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
-                    cursor, headerlc))
-                return nil
+                -- print(strfmt("Unexpected found. Cursor: %d. Header:  %s",
+                --     cursor, headerlc))
+                -- return nil
             end
         end
 
