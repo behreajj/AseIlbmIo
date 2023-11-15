@@ -64,22 +64,18 @@ local function decompress(bytes)
     local j = 0
     while j < lenBytes do
         local byte = bytes[1 + j]
-        print(string.format("byte: %d", byte))
         local readStep = 1
 
         -- The algorithm is adjusted for unsigned bytes, not signed.
         if byte > 128 then
             local next = bytes[2 + j]
-            print(string.format("repeating: %d", next))
             readStep = 2
             local k = 0
-            print(string.format("257-byte: %d", (257 - byte)))
             while k < (257 - byte) do
                 decompressed[#decompressed + 1] = next
                 k = k + 1
             end
         elseif byte < 128 then
-            print("unique")
             local k = 0
             while k < (byte + 1) do
                 decompressed[#decompressed + 1] = bytes[2 + j + k]
@@ -260,19 +256,19 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
         strpack(">I4", formLength),
         formatHeader,
         "BMHD",
-        strpack(">I4", 20),                           -- Chunk length.
-        strpack(">I2", wSprite),                      -- 1. width
-        strpack(">I2", hSprite),                      -- 1. height
-        strpack(">I2", 0),                            -- 2. xOrig
-        strpack(">I2", 0),                            -- 2. yOrig
-        strpack(">I1", planes),                       -- 3. planes
-        strpack(">I2", compressNum),                  -- 3. masking, compress
-        strpack(">I1", 0),                            -- 3. reserved
-        strpack(">I2", alphaIndex),                   -- 4. alpha mask
-        strpack(">I1", xAspect),                      -- 4. aspect ratio x
-        strpack(">I1", yAspect),                      -- 4. aspect ratio y
-        strpack(">I2", wSprite),                      -- 5. page width
-        strpack(">I2", hSprite),                      -- 5. page height
+        strpack(">I4", 20),          -- Chunk length.
+        strpack(">I2", wSprite),     -- 1. width
+        strpack(">I2", hSprite),     -- 1. height
+        strpack(">I2", 0),           -- 2. xOrig
+        strpack(">I2", 0),           -- 2. yOrig
+        strpack(">I1", planes),      -- 3. planes
+        strpack(">I2", compressNum), -- 3. masking, compress
+        strpack(">I1", 0),           -- 3. reserved
+        strpack(">I2", alphaIndex),  -- 4. alpha mask
+        strpack(">I1", xAspect),     -- 4. aspect ratio x
+        strpack(">I1", yAspect),     -- 4. aspect ratio y
+        strpack(">I2", wSprite),     -- 5. page width
+        strpack(">I2", hSprite),     -- 5. page height
     }
 
     if writeCmap then
@@ -340,41 +336,6 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
                     row[idxFlat] = row[idxFlat]| 0x80 >> xRem
                 end
                 i = i + 1
-            end
-
-            if useCompress then
-                ---@type integer[]
-                local compressed = {}
-                local j = 0
-                local step = 1
-                while j < #row do
-                    local curr = row[1 + j]
-                    local next = row[2 + j]
-
-                    if next then
-                        local instances = 0
-                        repeat
-                            instances = instances + 1
-                            next = row[2 + j + instances]
-                        until curr ~= next
-
-                        if instances > 1 then
-                            compressed[#compressed + 1] = -instances & 0xff
-                            compressed[#compressed + 1] = curr
-                            step = instances + 1
-                        else
-                            compressed[#compressed + 1] = curr
-                            step = 1
-                        end
-                    else
-                        compressed[#compressed + 1] = curr
-                        step = 1
-                    end
-
-                    j = j + step
-                end
-
-                row = compressed
             end
 
             local k = 0
@@ -520,9 +481,9 @@ local function readFile(importFilepath, aspectResponse)
             compressed = strunpack(">I1", comprStr)
             isTrueColor24 = planes == 24
             isTrueColor32 = planes == 32
-            print(strfmt(
-                "planes: %d\nmasking: %d\ncompressed: %d",
-                planes, masking, compressed))
+            -- print(strfmt(
+            --     "planes: %d\nmasking: %d\ncompressed: %d",
+            --     planes, masking, compressed))
 
             -- if isTrueColor24 or isTrueColor32 then
             --     print("True color image.")
@@ -1173,7 +1134,8 @@ dlg:check {
     id = "useCompress",
     label = "Compress:",
     selected = defaults.useCompress,
-    focus = false
+    focus = false,
+    visible = false
 }
 
 dlg:newrow { always = false }
