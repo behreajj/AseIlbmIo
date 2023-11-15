@@ -710,7 +710,9 @@ local function readFile(importFilepath, aspectResponse)
                 bytes[i] = strbyte(binData, cursor + 7 + i)
             end
 
-            if compressed == 1 then
+            -- This should be not equal to zero, in case the comrpessed value
+            -- is not equal to one.
+            if compressed ~= 0 then
                 bytes = decompress(bytes)
                 -- print(strfmt("Decompressed: %d", #bytes))
             end
