@@ -5,7 +5,6 @@ local exportFileTypes = { "ilbm", "lbm" }
 local aspectResponses = { "BAKE", "SPRITE_RATIO", "IGNORE" }
 
 local defaults = {
-    -- To test anim files: https://aminet.net/pix/anim
     aspectResponse = "SPRITE_RATIO",
     maxAspect = 16,
     maxFrames = 512,
@@ -32,7 +31,7 @@ end
 ---@return integer
 ---@return integer
 local function reduceRatio(a, b)
-    local denom <const> = gcd(a, b)
+    local denom = gcd(a, b)
     return a // denom, b // denom
 end
 
@@ -121,10 +120,6 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
     local yAspect = max(1, abs(pxRatio.h))
 
     -- No. of Planes = log(lenPalette, 2)
-    -- 2 ^ 1 =   2, 2 ^ 5 =  32
-    -- 2 ^ 2 =   4, 2 ^ 6 =  64
-    -- 2 ^ 3 =   8, 2 ^ 7 = 128
-    -- 2 ^ 4 =  16, 2 ^ 8 = 256
     local planes = 8
 
     ---@type integer[]
@@ -229,7 +224,6 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
         end
     end
 
-    -- Do sprites need to be some proportion in order to load in Irfanview?
     local formatHeader = isPbm and "PBM " or "ILBM"
     local compressNum = useCompress and 1 or 0
     local wordsPerRow = ceil(wSprite / 16)
@@ -349,8 +343,7 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
         end
     end
 
-    local binStr = table.concat(binData, "")
-    return binStr
+    return table.concat(binData, "")
 end
 
 ---@param importFilepath string
@@ -398,7 +391,6 @@ local function readFile(importFilepath, aspectResponse)
     local wImage = 1
     local hImage = 1
     local planes = 0
-    local masking = 0
     local compressed = 0
     local alphaIndex = 0
     local xAspect = 1
@@ -452,8 +444,8 @@ local function readFile(importFilepath, aspectResponse)
             isAcbm = true
             chunkLen = 4
         elseif headerlc == "anim" then
-            isAnim = true
             -- print(strfmt("\nANIM found. Cursor: %d.", cursor))
+            isAnim = true
             chunkLen = 4
         elseif headerlc == "bmhd" then
             local lenStr = strsub(binData, cursor + 4, cursor + 7)
@@ -839,8 +831,8 @@ local function readFile(importFilepath, aspectResponse)
 
             chunkLen = 8 + lenLocal
 
-            -- Some Mark Ferrari files have extra zeroes at the end of tiny
-            -- chunks which make it hard to find body.
+            -- Some files have extra zeroes at the end of tiny chunks which
+            -- make it hard to find next chunk.
             while strbyte(binData, cursor + chunkLen) == 0 do
                 chunkLen = chunkLen + 1
             end
@@ -965,8 +957,8 @@ local function readFile(importFilepath, aspectResponse)
         local activeLayer = sprite.layers[1]
 
         -- Create a dictionary where a palette index, the key, is assigned an
-        -- array of all the flattened coordinates (i=x + y * w) where the index
-        -- is used.
+        -- array of all the flattened coordinates (i = x + y * w) where the
+        -- index is used.
         ---@type table<integer, integer[]>
         local histogram = {}
         local lenPixels = #pixels
