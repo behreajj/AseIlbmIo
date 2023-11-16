@@ -253,8 +253,8 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
         strpack(">I4", 20),          -- Chunk length.
         strpack(">I2", wSprite),     -- 1. width
         strpack(">I2", hSprite),     -- 1. height
-        strpack(">I2", 0),           -- 2. xOrig
-        strpack(">I2", 0),           -- 2. yOrig
+        strpack(">i2", 0),           -- 2. xOrig
+        strpack(">i2", 0),           -- 2. yOrig
         strpack(">I1", planes),      -- 3. planes
         strpack(">I2", compressNum), -- 3. masking, compress
         strpack(">I1", 0),           -- 3. reserved
@@ -303,8 +303,7 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
             binData[#binData + 1] = strchar(pixels[j])
         end
     else
-        local bytesPerRow = ceil(wSprite / 16) * 2
-        local bprPlanes = planes * bytesPerRow
+        local charPlanes = planes * charsPerRow
         local widthPlanes = wSprite * planes
 
         local y = 0
@@ -312,7 +311,7 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
             ---@type integer[]
             local row = {}
             local h = 0
-            while h < bprPlanes do
+            while h < charPlanes do
                 h = h + 1
                 row[h] = 0
             end
@@ -326,7 +325,7 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
                 if pixel & (1 << z) ~= 0 then
                     local xFlr = x // 8
                     local xRem = x % 8
-                    local idxFlat = 1 + xFlr + z * bytesPerRow
+                    local idxFlat = 1 + xFlr + z * charsPerRow
                     row[idxFlat] = row[idxFlat]| 0x80 >> xRem
                 end
                 i = i + 1
