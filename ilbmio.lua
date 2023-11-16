@@ -111,6 +111,7 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
 
     -- Unpack sprite spec.
     local wSprite = spriteSpec.width
+    if isPbm and wSprite % 2 ~= 0 then wSprite = wSprite + 1 end
     local hSprite = spriteSpec.height
     local alphaIndex = spriteSpec.transparentColor
     local colorMode = spriteSpec.colorMode
