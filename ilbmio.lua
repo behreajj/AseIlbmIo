@@ -159,7 +159,6 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
             planes = max(1, ceil(log(min(256, lenPaletteActual), 2)))
         end
     elseif colorMode == ColorMode.GRAY then
-        -- TODO: Support alpha for true color 32?
         lenPaletteActual = 256
         palette = Palette(256)
         local i = 0
@@ -170,14 +169,27 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
 
         flat:drawSprite(sprite, frObj)
         local pxItr = flat:pixels()
-        for pixel in pxItr do
-            local av16 = pixel()
-            local a8 = (av16 >> 0x08) & 0xff
-            if a8 <= 0 then
-                pixels[#pixels + 1] = alphaIndex
-            else
+
+        if isPbm or sprite.backgroundLayer then
+            for pixel in pxItr do
+                local av16 = pixel()
+                local a8 = (av16 >> 0x08) & 0xff
+                if a8 <= 0 then
+                    pixels[#pixels + 1] = alphaIndex
+                else
+                    local v8 = av16 & 0xff
+                    pixels[#pixels + 1] = v8
+                end
+            end
+        else
+            writeCmap = false
+            planes = 32
+
+            for pixel in pxItr do
+                local av16 = pixel()
+                local a8 = (av16 >> 0x08) & 0xff
                 local v8 = av16 & 0xff
-                pixels[#pixels + 1] = v8
+                pixels[#pixels + 1] = a8 << 0x18 | v8 << 0x10 | v8 << 0x08 | v8
             end
         end
     else
@@ -190,9 +202,10 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
         palette = palettes[palIdx]
         lenPaletteActual = #palette
 
+        flat:drawSprite(sprite, frObj)
+        local pxItr = flat:pixels()
+
         if isPbm then
-            flat:drawSprite(sprite, frObj)
-            local pxItr = flat:pixels()
             for pixel in pxItr do
                 local abgr32 = pixel()
                 local a8 = (abgr32 >> 0x18) & 0xff
@@ -208,7 +221,8 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
             end
         else
             writeCmap = false
-            if sprite.backgroundLayer ~= nil then
+
+            if sprite.backgroundLayer then
                 isTrueColor24 = true
                 planes = 24
             else
@@ -216,9 +230,6 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
             end
 
             local mask = isTrueColor24 and 0x00ffffff or 0xffffffff
-
-            flat:drawSprite(sprite, frObj)
-            local pxItr = flat:pixels()
             for pixel in pxItr do
                 pixels[#pixels + 1] = mask & pixel()
             end
