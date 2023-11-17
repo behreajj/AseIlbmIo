@@ -343,11 +343,51 @@ local function writeFile(sprite, frObj, isPbm, useCompress)
                 i = i + 1
             end
 
-            local k = 0
+            if useCompress then
+                ---@type integer[]
+                local compress = {}
+                local k = 0
+                while k < charPlanes do
+                    local oldI = k
+                    local sameCount = 1
+                    while k < charPlanes - 1 and row[k + 1] == row[k + 2] do
+                        sameCount = sameCount + 1
+                        k = k + 1
+                    end
+
+                    if sameCount >= 1 then
+                        compress[#compress + 1] = (1 - sameCount) & 0xff
+                        compress[#compress + 1] = row[k + 1]
+                    else
+                        k = oldI
+                        local diffCount = 1
+                        while k < charPlanes - 1
+                            and row[k + 1] and row[k + 0] ~= row[k + 1]
+                        do
+                            diffCount = diffCount + 1
+                            k = k + 1
+                        end
+
+                        compress[#compress + 1] = diffCount
+                        local m = 0
+                        while m < diffCount do
+                            m = m + 1
+                            compress[#compress + 1] = row[oldI + m]
+                        end
+                    end
+
+                    k = k + 1
+                end
+
+                -- if #compress % 2 ~= 0 then compress[#compress + 1] = 0 end
+                row = compress
+            end
+
+            local n = 0
             local lenRow = #row
-            while k < lenRow do
-                k = k + 1
-                binData[#binData + 1] = strchar(row[k])
+            while n < lenRow do
+                n = n + 1
+                binData[#binData + 1] = strchar(row[n])
             end
 
             y = y + 1
@@ -1139,7 +1179,7 @@ dlg:check {
     label = "Compress:",
     selected = defaults.useCompress,
     focus = false,
-    visible = false
+    visible = true
 }
 
 dlg:newrow { always = false }
