@@ -1,5 +1,7 @@
 # Aseprite ILBM Import and Export
 
+**PrismaticRealms has released an [Amiga IFF exporter](https://prismaticrealms.itch.io/aseprite-script-amiga-iffilbm-exporter) for Aseprite. Development on this repository will be halted. Please support the development of that project.**
+
 ![Screen shot](screenCap.png)
 
 This is a script for the [Aseprite](https://www.aseprite.org/) [scripting API](https://www.aseprite.org/docs/scripting/). It provides **rudimentary** support for importing and exporting `.ilbm` and `.lbm` files from the `.iff` family.
